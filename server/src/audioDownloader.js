@@ -800,6 +800,96 @@ class AudioDownloader {
     return finalPath
   }
 
+  // Tek adayı yt-dlp ile indirir. done=true ise getCachedFile(trackId) doludur.
+  // YouTube adaylarında istemci zinciri denenir (android → ios → tv →
+  // web_embedded → default); veri merkezi bot engeli istemciden istemciye değişir.
+  // YT_EXTRACTOR_ARGS ham eklenir (örn. PO token).
+  async tryYtdlpCandidate(trackId, candidate, attemptNo, outputTemplate) {
+    const clientAttempts = candidate.source === 'youtube'
+      ? ['android', 'ios', 'tv', 'web_embedded', 'default']
+      : ['default']
+    let lastError = null
+    for (let spawn = 0; spawn < clientAttempts.length; spawn += 1) {
+      if (spawn > 0) {
+        console.log(`[AudioDownloader] ${trackId} aday #${attemptNo + 1} başarısız/bot engeli, ${clientAttempts[spawn]} istemcisiyle yeniden deneniyor`)
+        await new Promise((resolve) => setTimeout(resolve, 2_000))
+      }
+      const ytClient = clientAttempts[spawn]
+      const ytArgs = [
+        ytClient === 'default' ? '' : `youtube:player_client=${ytClient}`,
+        YT_EXTRACTOR_ARGS,
+      ].filter(Boolean).join(';')
+      const subprocess = ytdl.exec(candidate.url, {
+        // webm/opus önce: m4a'dan hızlı iniyor ve kısmi .part dosyası tarayıcıda çalabiliyor.
+        format: 'bestaudio[ext=webm]/bestaudio[acodec=opus]/bestaudio[ext=m4a]/bestaudio/best',
+        output: outputTemplate,
+        noWarnings: true, noPlaylist: true, newline: true,
+        maxFilesize: String(MAX_DOWNLOAD_BYTES), socketTimeout: 15,
+        retries: spawn === 0 ? 3 : 2, fragmentRetries: 3, concurrentFragments: 4,
+        retrySleep: 2,
+        ...(candidate.source === 'youtube' && ytArgs ? { extractorArgs: ytArgs } : {}),
+      }, { timeout: 10 * 60_000, killSignal: 'SIGKILL' })
+      runningProcesses.set(trackId, subprocess)
+      const parseProgress = (chunk) => {
+        const text = String(chunk)
+        const matches = [...text.matchAll(/\[download\]\s+([\d.]+)%/g)]
+        const last = matches.at(-1)
+        if (last) setDownloadState(trackId, { status: 'downloading', progress: Math.min(99, Number(last[1]) || 0) })
+      }
+      subprocess.stdout?.on('data', parseProgress)
+      subprocess.stderr?.on('data', parseProgress)
+      try {
+        await subprocess
+      } catch (error) {
+        lastError = error
+        runningProcesses.delete(trackId)
+        this.cleanupParts(trackId)
+        continue // bot engeli vb.: sonraki istemci denemesi
+      }
+      const produced = this.getCachedFile(trackId)
+      if (produced) return { done: true, error: null }
+      // Çıkış 0 ama dosya yok: max-filesize sessiz abort'u — part'ları temizle
+      // ve sonraki istemci/yedek adayla devam et.
+      this.cleanupParts(trackId)
+    }
+    return { done: false, error: lastError }
+  }
+
+  // Doğrudan medya URL'sini (SoundCloud progressive vb.) yt-dlp'siz indirir:
+  // daha hızlı, daha az RAM, bot kontrolüne takılmaz. Boyut sınırı akış sırasında.
+  async downloadDirectUrl(url, trackId, ext = '.mp3') {
+    const partPath = path.join(DOWNLOADS_DIR, `${trackId}${ext}.part`)
+    const finalPath = path.join(DOWNLOADS_DIR, `${trackId}${ext}`)
+    const res = await fetch(String(url), {
+      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36' },
+      signal: AbortSignal.timeout(5 * 60_000),
+    })
+    if (!res.ok || !res.body) throw new Error(`Doğrudan indirme başarısız (${res.status}).`)
+    let received = 0
+    const fd = fs.openSync(partPath, 'w')
+    try {
+      const reader = res.body.getReader()
+      for (;;) {
+        const { done, value } = await reader.read()
+        if (done) break
+        received += value.length
+        if (received > MAX_DOWNLOAD_BYTES) {
+          try { await reader.cancel() } catch {}
+          throw new Error('Dosya izin verilen boyutu aşıyor.')
+        }
+        fs.writeSync(fd, value)
+      }
+    } catch (error) {
+      try { fs.closeSync(fd) } catch {}
+      fs.rmSync(partPath, { force: true })
+      throw error
+    }
+    try { fs.closeSync(fd) } catch {}
+    try { fs.rmSync(finalPath, { force: true }) } catch {}
+    fs.renameSync(partPath, finalPath)
+    return finalPath
+  }
+
   async downloadTrackSync(input) {
     const trackData = saveOrUpdateTrack(input)
     const trackId = trackData.id
@@ -841,64 +931,36 @@ class AudioDownloader {
       // yarısı inmiş .part dosyası tarayıcıda çalabiliyor (m4a'nın moov atomu dosyanın sonunda).
       const attemptUrls = [source, ...(source.alternatives || [])]
       let lastError = null
+      let originSource = source.source
       for (let attempt = 0; attempt < attemptUrls.length; attempt += 1) {
         const candidate = attemptUrls[attempt]
-        // YouTube adayları birden fazla player istemcisiyle denenir: veri merkezi
-        // IP'leri (Render vb.) bot kontrolüne takılır ve istemciden istemciye sonuç
-        // değişir. android → ios → tv → web_embedded → default sırası denenir.
-        // YT_EXTRACTOR_ARGS ham eklenir (örn. PO token: "youtube:po_token=web.gvs+XXX").
-        const clientAttempts = candidate.source === 'youtube'
-          ? ['android', 'ios', 'tv', 'web_embedded', 'default']
-          : ['default']
-        let candidateDone = false
-        for (let spawn = 0; spawn < clientAttempts.length; spawn += 1) {
-          if (spawn > 0) {
-            console.log(`[AudioDownloader] ${trackId} aday #${attempt + 1} başarısız/bot engeli, ${clientAttempts[spawn]} istemcisiyle yeniden deneniyor`)
-            await new Promise((resolve) => setTimeout(resolve, 2_000))
-          }
-          const ytClient = clientAttempts[spawn]
-          const ytArgs = [
-            ytClient === 'default' ? '' : `youtube:player_client=${ytClient}`,
-            YT_EXTRACTOR_ARGS,
-          ].filter(Boolean).join(';')
-          const subprocess = ytdl.exec(candidate.url, {
-            // webm/opus önce: m4a'dan hızlı iniyor ve kısmi .part dosyası tarayıcıda çalabiliyor.
-            // Android Chrome webm/opus destekler (iOS Safari desteklemez ama hedef Android).
-            format: 'bestaudio[ext=webm]/bestaudio[acodec=opus]/bestaudio[ext=m4a]/bestaudio/best',
-            output: outputTemplate,
-            noWarnings: true, noPlaylist: true, newline: true,
-            maxFilesize: String(MAX_DOWNLOAD_BYTES), socketTimeout: 15,
-            retries: spawn === 0 ? 3 : 2, fragmentRetries: 3, concurrentFragments: 4,
-            retrySleep: 2,
-            ...(candidate.source === 'youtube' && ytArgs ? { extractorArgs: ytArgs } : {}),
-          }, { timeout: 10 * 60_000, killSignal: 'SIGKILL' })
-          runningProcesses.set(trackId, subprocess)
-          const parseProgress = (chunk) => {
-            const text = String(chunk)
-            const matches = [...text.matchAll(/\[download\]\s+([\d.]+)%/g)]
-            const last = matches.at(-1)
-            if (last) setDownloadState(trackId, { status: 'downloading', progress: Math.min(99, Number(last[1]) || 0) })
-          }
-          subprocess.stdout?.on('data', parseProgress)
-          subprocess.stderr?.on('data', parseProgress)
-          try {
-            await subprocess
-          } catch (error) {
-            lastError = error
-            runningProcesses.delete(trackId)
-            this.cleanupParts(trackId)
-            continue // bot engeli vb.: sonraki istemci denemesi
-          }
-          const produced = this.getCachedFile(trackId)
-          if (produced) { candidateDone = true; break }
-          // Çıkış 0 ama dosya yok: max-filesize sessiz abort'u — part'ları temizle
-          // ve default istemciyle / yedek adayla devam et.
-          this.cleanupParts(trackId)
-        }
-        if (candidateDone) break
+        const result = await this.tryYtdlpCandidate(trackId, candidate, attempt, outputTemplate)
+        if (result.error && !lastError) lastError = result.error
+        if (result.done) break
         if (attempt < attemptUrls.length - 1) {
           console.log(`[AudioDownloader] ${trackId} aday #${attempt + 1} başarısız, yedek deneniyor (${candidate.title?.slice(0, 40)})`)
           await new Promise((resolve) => setTimeout(resolve, 600))
+        }
+      }
+
+      // Çapraz kaynak yedekliği: YouTube adaylarının tamamı bot engeline takılırsa
+      // (veri merkezi IP'si), aynı parça SoundCloud'dan aranıp indirilir.
+      // SC doğrudan URL'leri CDN'den gelir, YT bot kontrolüne takılmaz.
+      if (!this.getCachedFile(trackId) && source.source !== 'soundcloud' && source.source !== 'deezer') {
+        try {
+          const sc = await this.findSoundCloudSource(trackData, 12_000).catch(() => null)
+          if (sc?.url) {
+            console.log(`[AudioDownloader] ${trackId} YT tıkandı, SoundCloud yedeği deneniyor — ${(sc.title || '').slice(0, 60)}`)
+            if (sc.protocol === 'hls') {
+              const result = await this.tryYtdlpCandidate(trackId, { url: sc.url, title: sc.title, source: 'soundcloud' }, 0, outputTemplate)
+              if (result.error && !lastError) lastError = result.error
+            } else {
+              await this.downloadDirectUrl(sc.url, trackId)
+            }
+            if (this.getCachedFile(trackId)) originSource = 'soundcloud'
+          }
+        } catch (error) {
+          if (!lastError) lastError = error
         }
       }
 
@@ -910,16 +972,16 @@ class AudioDownloader {
         fs.rmSync(downloadedFile, { force: true })
         throw new Error('Dosya izin verilen boyutu aşıyor.')
       }
-      if (source.source === 'soundcloud' || source.source === 'youtube') {
+      if (originSource === 'soundcloud' || originSource === 'youtube') {
         // Tam parça ~12KB/sn (128kbps); %33 doluluğun altı kesin kesik/bozuk indirmedir
         // (bot engeli snippet'i, yanlış kısa video). SoundCloud daha katı: preview tuzakları.
-        const bytesPerSecond = source.source === 'soundcloud' ? 12_000 : 4_000
+        const bytesPerSecond = originSource === 'soundcloud' ? 12_000 : 4_000
         const expectedMinBytes = Math.round((Number(trackData.duration) || 0) * bytesPerSecond)
-        const minBytes = expectedMinBytes > 100_000 ? expectedMinBytes : (source.source === 'soundcloud' ? 800_000 : 120_000)
+        const minBytes = expectedMinBytes > 100_000 ? expectedMinBytes : (originSource === 'soundcloud' ? 800_000 : 120_000)
         if (fileSize < minBytes) {
           this.forgetCachedFile(downloadedFile)
           fs.rmSync(downloadedFile, { force: true })
-          throw new Error(source.source === 'soundcloud'
+          throw new Error(originSource === 'soundcloud'
             ? 'SoundCloud tam parçası alınamadı (yalnızca önizleme erişimi olabilir).'
             : 'Ses dosyası tam inmedi (kaynak kesildi veya bot engellendi).')
         }
