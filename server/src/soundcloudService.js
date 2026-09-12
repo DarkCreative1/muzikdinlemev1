@@ -72,19 +72,35 @@ async function fetchText(url, timeoutMs = 10_000) {
 }
 
 // client_id SoundCloud'un JS bundle'larında gömülüdür ve zamanla değişir; sayfadaki
-// asset script'lerini tarayılp en son bulunandan çıkarılır. Cookie dosyası yoksa
+// asset script'leri taranıp en son bulunandan çıkarılır. Cookie dosyası yoksa
 // veya ENV'de verilmemişse bu yol sayesinde arama/akış yine çalışır.
+// Bundle'lar PARALEL taranır: ilk eşleşme kazanır, toplam üst sınır ~15sn.
+// (Önceki seri sürüm 8×10sn = 80sn'ye kadar sarkıp geri dönüş bütçesini yiyordu.)
 async function discoverClientId() {
   const html = await fetchText('https://soundcloud.com/', 10_000)
   if (!html) return null
   const scripts = [...html.matchAll(/<script[^>]+src="(https:\/\/a-v2\.sndcdn\.com\/assets\/[^"]+\.js)"/g)].map((m) => m[1])
-  for (const assetUrl of scripts.reverse().slice(0, 8)) {
-    const js = await fetchText(assetUrl, 10_000)
-    if (!js) continue
-    const match = js.match(/client_id\s*[:=]\s*"([A-Za-z0-9]{20,50})"/)
-    if (match) return match[1]
-  }
-  return null
+  const targets = scripts.reverse().slice(0, 8)
+  if (!targets.length) return null
+  return new Promise((resolve) => {
+    let pending = targets.length
+    let settled = false
+    const done = (value) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      resolve(value)
+    }
+    const timer = setTimeout(() => done(null), 15_000)
+    timer.unref?.()
+    for (const assetUrl of targets) {
+      fetchText(assetUrl, 10_000).then((js) => {
+        const match = js && js.match(/client_id\s*[:=]\s*"([A-Za-z0-9]{20,50})"/)
+        if (match) done(match[1])
+        else if (--pending === 0) done(null)
+      }).catch(() => { if (--pending === 0) done(null) })
+    }
+  })
 }
 
 async function getClientId() {

@@ -576,6 +576,13 @@ app.delete('/api/playlists/:playlistId/tracks/:trackId', async (req, reply) => {
 })
 app.get('/api/dokuman', sendIndex)
 app.get('/', sendIndex)
+// Tarayıcılar otomatik ister; dist'te varsa servis edilir (logda 404 kirliliği önlenir).
+app.get('/favicon.svg', async (req, reply) => {
+  const file = path.join(FRONTEND_DIST, 'favicon.svg')
+  if (!fs.existsSync(file)) return reply.code(404).send({ detail: 'Kaynak bulunamadı.', code: 'NOT_FOUND' })
+  return reply.type('image/svg+xml').header('Cache-Control', 'public, max-age=86400').send(fs.createReadStream(file))
+})
+app.get('/favicon.ico', async (req, reply) => reply.redirect('/favicon.svg'))
 app.get('/*', (req, reply) => {
   // Bilinmeyen API/downloads yolları SPA HTML'i değil tutarlı JSON 404 dönmeli.
   if (req.url.startsWith('/api/') || req.url.startsWith('/downloads/')) return reply.code(404).send({ detail: 'Kaynak bulunamadı.', code: 'NOT_FOUND' })

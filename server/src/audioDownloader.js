@@ -21,6 +21,9 @@ const FOLLOW_MAX_RESTARTS = 2
 const FOLLOW_MIN_RESTART_MS = 1_500
 const PRIORITY_EXTRA_SLOTS = 2
 const PRELOAD_SPACING_MS = 1_500
+// Ham yt-dlp extractor argümanı (örn. PO token için "youtube:po_token=web.gvs+XXX").
+// Render ayarlarından YT_EXTRACTOR_ARGS olarak verilir, tüm YouTube denemelerine eklenir.
+const YT_EXTRACTOR_ARGS = String(process.env.YT_EXTRACTOR_ARGS || '').trim()
 const MAX_DOWNLOAD_STATES = 10_000
 // Bir indirme en fazla ~10 dk sürer; 1 saatten eski .part dosyaları ölü kalıntıdır.
 const STALE_PART_MS = 60 * 60_000
@@ -840,18 +843,24 @@ class AudioDownloader {
       let lastError = null
       for (let attempt = 0; attempt < attemptUrls.length; attempt += 1) {
         const candidate = attemptUrls[attempt]
-        // YouTube adayları iki istemciyle denenir: android client bot kontrolüne
-        // takılmaz ama bazı videolarda dev/yanlış format seçebilir — bu durumda
-        // yt-dlp max-filesize aşımını SESSİZce abort eder (ÇIKIŞ 0 verir, yalnızca
-        // .part bırakır!). "Çıkış 0 ama dosya yok" ya da bot engeli olursa default
-        // istemciyle tekrar deneyip doğru format listesiyle (webm/opus) indirilir.
-        const clientAttempts = candidate.source === 'youtube' ? ['android', 'default'] : ['default']
+        // YouTube adayları birden fazla player istemcisiyle denenir: veri merkezi
+        // IP'leri (Render vb.) bot kontrolüne takılır ve istemciden istemciye sonuç
+        // değişir. android → ios → tv → web_embedded → default sırası denenir.
+        // YT_EXTRACTOR_ARGS ham eklenir (örn. PO token: "youtube:po_token=web.gvs+XXX").
+        const clientAttempts = candidate.source === 'youtube'
+          ? ['android', 'ios', 'tv', 'web_embedded', 'default']
+          : ['default']
         let candidateDone = false
         for (let spawn = 0; spawn < clientAttempts.length; spawn += 1) {
           if (spawn > 0) {
-            console.log(`[AudioDownloader] ${trackId} aday #${attempt + 1} başarısız/bot engeli, default istemciyle yeniden deneniyor`)
+            console.log(`[AudioDownloader] ${trackId} aday #${attempt + 1} başarısız/bot engeli, ${clientAttempts[spawn]} istemcisiyle yeniden deneniyor`)
             await new Promise((resolve) => setTimeout(resolve, 2_000))
           }
+          const ytClient = clientAttempts[spawn]
+          const ytArgs = [
+            ytClient === 'default' ? '' : `youtube:player_client=${ytClient}`,
+            YT_EXTRACTOR_ARGS,
+          ].filter(Boolean).join(';')
           const subprocess = ytdl.exec(candidate.url, {
             // webm/opus önce: m4a'dan hızlı iniyor ve kısmi .part dosyası tarayıcıda çalabiliyor.
             // Android Chrome webm/opus destekler (iOS Safari desteklemez ama hedef Android).
@@ -861,9 +870,7 @@ class AudioDownloader {
             maxFilesize: String(MAX_DOWNLOAD_BYTES), socketTimeout: 15,
             retries: spawn === 0 ? 3 : 2, fragmentRetries: 3, concurrentFragments: 4,
             retrySleep: 2,
-            // android client bot kontrolüne takılmıyor (3/3 test başarılı); başarısız olursa
-            // spawn 1 default client ile dener.
-            ...(candidate.source === 'youtube' && clientAttempts[spawn] === 'android' ? { extractorArgs: 'youtube:player_client=android' } : {}),
+            ...(candidate.source === 'youtube' && ytArgs ? { extractorArgs: ytArgs } : {}),
           }, { timeout: 10 * 60_000, killSignal: 'SIGKILL' })
           runningProcesses.set(trackId, subprocess)
           const parseProgress = (chunk) => {
