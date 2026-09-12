@@ -1,0 +1,23 @@
+{
+  "name": "spotify-clone-backend",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Node.js (Fastify) port of the Python FastAPI Spotify downloader backend",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js"
+  },
+  "dependencies": {
+    "@fastify/cors": "^11.1.0",
+    "@fastify/static": "^10.1.3",
+    "better-sqlite3": "^12.4.1",
+    "fastify": "^5.11.3",
+    "youtube-dl-exec": "^3.0.27"
+  },
+  "allowScripts": {
+    "es5-ext@0.10.64": true,
+    "better-sqlite3@12.4.1": true,
+    "youtube-dl-exec@3.0.27": true
+  }
+}

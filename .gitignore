@@ -1,0 +1,41 @@
+# dependencies
+node_modules/
+server/node_modules/
+
+# builds
+dist/
+dist-ssr/
+*.local
+
+# logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# env / secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# OS / editors
+.DS_Store
+Thumbs.db
+.vscode/*
+!.vscode/extensions.json
+.idea/
+
+# wrangler / cloudflare
+.dev.vars
+.wrangler/
+
+# local sqlite / downloads (buyuk dosyalar pushlanmasin)
+*.db
+*.db-shm
+*.db-wal
+server/downloads/
+*.mp3
+*.mp4
