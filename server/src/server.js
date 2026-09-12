@@ -602,7 +602,7 @@ try {
   await app.listen({ port: PORT, host: HOST })
   const displayHost = HOST.includes(':') && !HOST.startsWith('[') ? `[${HOST}]` : HOST
   app.log.info(`Sunucu çalışıyor: http://${displayHost}:${PORT} (IPv6 aktif)`)
-  app.log.info(`YT bypass: cookies=${YT_COOKIES_PATH ? 'açık' : 'kapalı'} proxy=${YT_PROXY ? 'açık' : 'kapalı'}`)
+  app.log.info('YT bypass cookies=' + (YT_COOKIES_PATH ? 'acik' : 'kapali') + ' proxy=' + (YT_PROXY ? 'acik' : 'kapali'))
 }
 catch (error) { app.log.error(error); process.exit(1) }
 
