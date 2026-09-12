@@ -6,6 +6,7 @@ import { DOWNLOADS_DIR, MAX_CACHE_BYTES, MAX_DOWNLOAD_BYTES, MAX_CONCURRENT_DOWN
 import { saveOrUpdateTrack, markTrackDownloadMissing, getTrack } from './db.js'
 import { searchDeezerTracks, getDeezerTrackStream, hasDeezerAuth } from './deezerService.js'
 import { searchYouTubeTracks, fetchPipedStream } from './youtubeSearch.js'
+import { fetchRapidStream, rapidEnabled } from './rapidApi.js'
 import { searchSoundCloudTracks, getSoundCloudFullStream } from './soundcloudService.js'
 import { createDeezerDecryptor } from './deezerDecrypt.js'
 import { uploadFile, isR2Enabled, fetchR2ToFile } from './r2Storage.js'
@@ -1053,26 +1054,47 @@ class AudioDownloader {
             if (!lastError) lastError = error
           }
         }
+        // 3) RapidAPI yedeği (anahtarlı, kotası var): videoId başına 1-2 çağrı.
+        // 4) En son çare Piped (varsayılan kapalı, kendi sunucun varsa).
+        // İkisi de aynı aday ID'lerini kullanır.
+        const fallbackIds = []
+        if (!this.getCachedFile(trackId) && (rapidEnabled() || PIPED_API_URL)) {
+          for (const c of [source, ...(source.alternatives || [])]) {
+            const vid = String(c?.videoId || (c?.source === 'youtube' ? c?.source_id : '') || '')
+            if (/^[\w-]{11}$/u.test(vid) && !fallbackIds.includes(vid)) fallbackIds.push(vid)
+            if (fallbackIds.length >= 2) break
+          }
+          const directId = String(trackData.source === 'youtube' ? trackData.source_id || '' : '')
+          if (/^[\w-]{11}$/u.test(directId) && !fallbackIds.includes(directId)) fallbackIds.unshift(directId)
+        }
+        if (!this.getCachedFile(trackId) && rapidEnabled() && fallbackIds.length) {
+          try {
+            let rapid = null
+            for (const vid of fallbackIds.slice(0, 2)) {
+              if (this.getCachedFile(trackId)) break
+              rapid = await fetchRapidStream(vid).catch(() => null)
+              if (rapid?.url) {
+                console.log(`[AudioDownloader] ${trackId} RapidAPI yedeği deneniyor (${rapid.via}) — ${(rapid.title || vid).slice(0, 60)}`)
+                await this.downloadDirectUrl(rapid.url, trackId)
+                if (this.getCachedFile(trackId)) { originSource = 'rapid'; break }
+              }
+            }
+          } catch (error) {
+            console.log(`[AudioDownloader] ${trackId} RapidAPI yedeği başarısız (${error?.message || error})`)
+            if (!lastError) lastError = error
+          }
+        }
         // 3) En son çare Piped: üçüncü parti YouTube API'sinden doğrudan ses URL'si.
         // Hesap/çerez gerektirmez. googlevideo URL'leri genelde IP bağımsız çalışır.
         if (!this.getCachedFile(trackId) && PIPED_API_URL && (source.source === 'youtube' || source.source === 'spotify')) {
           try {
-            const ids = []
-            for (const c of [source, ...(source.alternatives || [])]) {
-              const vid = String(c?.videoId || (c?.source === 'youtube' ? c?.source_id : '') || '')
-              if (/^[\w-]{11}$/u.test(vid) && !ids.includes(vid)) ids.push(vid)
-              if (ids.length >= 2) break
-            }
-            // youtube kaynaklı parçada doğrudan ID her zaman vardır.
-            const directId = String(trackData.source === 'youtube' ? trackData.source_id || '' : '')
-            if (/^[\w-]{11}$/u.test(directId) && !ids.includes(directId)) ids.unshift(directId)
-            for (const vid of ids.slice(0, 2)) {
+            for (const vid of fallbackIds.slice(0, 2)) {
               if (this.getCachedFile(trackId)) break
               const piped = await fetchPipedStream(vid, { apiBase: PIPED_API_URL }).catch(() => null)
               if (piped?.url) {
                 console.log(`[AudioDownloader] ${trackId} Piped yedeği deneniyor — ${(piped.title || vid).slice(0, 60)}`)
                 await this.downloadDirectUrl(piped.url, trackId)
-                if (this.getCachedFile(trackId)) originSource = 'piped'
+                if (this.getCachedFile(trackId)) { originSource = 'piped'; break }
               }
             }
           } catch (error) {
@@ -1090,7 +1112,7 @@ class AudioDownloader {
         fs.rmSync(downloadedFile, { force: true })
         throw new Error('Dosya izin verilen boyutu aşıyor.')
       }
-      if (originSource === 'soundcloud' || originSource === 'youtube' || originSource === 'piped') {
+      if (originSource === 'soundcloud' || originSource === 'youtube' || originSource === 'piped' || originSource === 'rapid') {
         // Tam parça ~12KB/sn (128kbps); %33 doluluğun altı kesin kesik/bozuk indirmedir
         // (bot engeli snippet'i, yanlış kısa video). SoundCloud daha katı: preview tuzakları.
         const bytesPerSecond = originSource === 'soundcloud' ? 12_000 : 4_000
