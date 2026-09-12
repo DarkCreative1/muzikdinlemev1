@@ -995,20 +995,39 @@ class AudioDownloader {
             console.log(`[AudioDownloader] YouTube üst üste ${ytBotStreak} kez engellendi — devre kesici açıldı, ${YT_CIRCUIT_COOLDOWN_MS / 60_000} dk boyunca YT atlanıp yedek kaynak denenecek.`)
           }
         }
-        try {
-          const sc = await this.findSoundCloudSource(trackData, 12_000).catch(() => null)
-          if (sc?.url) {
-            console.log(`[AudioDownloader] ${trackId} YT tıkandı, SoundCloud yedeği deneniyor — ${(sc.title || '').slice(0, 60)}`)
-            if (sc.protocol === 'hls') {
-              const result = await this.tryYtdlpCandidate(trackId, { url: sc.url, title: sc.title, source: 'soundcloud' }, 0, outputTemplate)
-              if (result.error && !lastError) lastError = result.error
-            } else {
-              await this.downloadDirectUrl(sc.url, trackId)
+        // 1) Önce Deezer yedeği: YT tıkalıyken sürüm farkı kabul edilir,
+        // çalmayan parçadan iyidir. (YT seçili parçalarda Deezer ilk turda
+        // denenmez; burası yalnızca YT öldüyse çalışır.)
+        if (!this.getCachedFile(trackId)) {
+          try {
+            const dz = await this.findDeezerSource(trackData, Number(trackData.duration) || 0, Date.now(), 8_000).catch(() => null)
+            if (dz?.url) {
+              console.log(`[AudioDownloader] ${trackId} YT tıkandı, Deezer yedeği deneniyor — ${(dz.title || '').slice(0, 60)}`)
+              await this.downloadDeezerSync(dz, trackId, trackData)
+              if (this.getCachedFile(trackId)) originSource = 'deezer'
             }
-            if (this.getCachedFile(trackId)) originSource = 'soundcloud'
+          } catch (error) {
+            console.log(`[AudioDownloader] ${trackId} Deezer yedeği yetersiz (${error?.message || error})`)
+            if (!lastError) lastError = error
           }
-        } catch (error) {
-          if (!lastError) lastError = error
+        }
+        // 2) Son çare SoundCloud (Deezer de yoksa/bozuksa).
+        if (!this.getCachedFile(trackId)) {
+          try {
+            const sc = await this.findSoundCloudSource(trackData, 12_000).catch(() => null)
+            if (sc?.url) {
+              console.log(`[AudioDownloader] ${trackId} YT tıkandı, SoundCloud yedeği deneniyor — ${(sc.title || '').slice(0, 60)}`)
+              if (sc.protocol === 'hls') {
+                const result = await this.tryYtdlpCandidate(trackId, { url: sc.url, title: sc.title, source: 'soundcloud' }, 0, outputTemplate)
+                if (result.error && !lastError) lastError = result.error
+              } else {
+                await this.downloadDirectUrl(sc.url, trackId)
+              }
+              if (this.getCachedFile(trackId)) originSource = 'soundcloud'
+            }
+          } catch (error) {
+            if (!lastError) lastError = error
+          }
         }
       }
 
