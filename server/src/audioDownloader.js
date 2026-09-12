@@ -928,23 +928,36 @@ class AudioDownloader {
 
     setDownloadState(trackId, { status: 'downloading', progress: 0 })
     try {
-      const source = await this.findDownloadableSource(trackData)
+      let source = await this.findDownloadableSource(trackData)
       if (!source) throw new Error('Aramada uygun kaynak bulunamadı.')
       console.log(`[AudioDownloader] ${trackId} kaynak: ${source.source} — ${source.title}`)
       if (source.source === 'deezer') {
-        const downloadedFile = await this.downloadDeezerSync(source, trackId, trackData)
-        const fileSize = fs.statSync(downloadedFile).size
-        if (fileSize > MAX_DOWNLOAD_BYTES) {
-          this.forgetCachedFile(downloadedFile)
-          fs.rmSync(downloadedFile, { force: true })
-          throw new Error('Dosya izin verilen boyutu aşıyor.')
+        try {
+          const downloadedFile = await this.downloadDeezerSync(source, trackId, trackData)
+          const fileSize = fs.statSync(downloadedFile).size
+          if (fileSize > MAX_DOWNLOAD_BYTES) {
+            this.forgetCachedFile(downloadedFile)
+            fs.rmSync(downloadedFile, { force: true })
+            throw new Error('Dosya izin verilen boyutu aşıyor.')
+          }
+          this.registerCachedFile(downloadedFile)
+          const fileName = `${sanitizeFilename(trackData.artist) || 'Artist'} - ${sanitizeFilename(trackData.title) || trackId}${path.extname(downloadedFile)}`
+          saveOrUpdateTrack({ ...trackData, file_path: downloadedFile, file_name: fileName, file_size: fileSize, is_downloaded: true })
+          await mirrorToR2(trackId, downloadedFile)
+          setTerminalState(trackId, { status: 'completed', progress: 100, file_name: fileName, file_url: `/api/stream/${encodeURIComponent(trackId)}` })
+          return downloadedFile
+        } catch (error) {
+          // Önizleme-only (free) ARL veya bozuk Deezer yanıtı: ölü çıkış yok,
+          // YT adaylarına düş; onlar da yoksa SC yedeği aşağıdaki blokta denenir.
+          console.log(`[AudioDownloader] ${trackId} Deezer yetersiz (${error?.message || error}), YT/SC yedeğine geçiliyor`)
+          const ytFallback = await this.findYouTubeCandidates(trackData, Number(trackData.duration) || 0, Date.now(), 8_000, 10_000).catch(() => null)
+          if (ytFallback?.best) {
+            source = { ...ytFallback.best, alternatives: ytFallback.alternatives || [] }
+            console.log(`[AudioDownloader] ${trackId} yedek kaynak: youtube — ${source.title}`)
+          } else {
+            throw error
+          }
         }
-        this.registerCachedFile(downloadedFile)
-        const fileName = `${sanitizeFilename(trackData.artist) || 'Artist'} - ${sanitizeFilename(trackData.title) || trackId}${path.extname(downloadedFile)}`
-        saveOrUpdateTrack({ ...trackData, file_path: downloadedFile, file_name: fileName, file_size: fileSize, is_downloaded: true })
-        await mirrorToR2(trackId, downloadedFile)
-        setTerminalState(trackId, { status: 'completed', progress: 100, file_name: fileName, file_url: `/api/stream/${encodeURIComponent(trackId)}` })
-        return downloadedFile
       }
 
       const outputTemplate = path.join(DOWNLOADS_DIR, `${trackId}.%(ext)s`)
