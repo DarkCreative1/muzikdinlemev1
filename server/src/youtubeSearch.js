@@ -228,3 +228,33 @@ export async function getYouTubeVideoMeta(videoId, { timeoutMs = 6_000 } = {}) {
 export function clearYouTubeSearchCache() {
   cache.clear()
 }
+
+// Piped yedeği: videoId → doğrudan ses URL'si. Hesap/çerez gerektirmez;
+// yt-dlp'nin bot engeline takıldığı ortamlarda son çare olarak kullanılır.
+// En yüksek bitrateli progressive ses akışı seçilir (HLS değil).
+export async function fetchPipedStream(videoId, { apiBase = '', timeoutMs = 10_000 } = {}) {
+  const id = String(videoId || '').trim()
+  const base = String(apiBase || '').replace(/\/+$/u, '')
+  if (!/^[\w-]{11}$/u.test(id) || !base) return null
+  const res = await fetch(`${base}/streams/${id}`, {
+    headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36', Accept: 'application/json' },
+    signal: AbortSignal.timeout(timeoutMs),
+  })
+  if (!res.ok) return null
+  const data = await res.json().catch(() => null)
+  const streams = Array.isArray(data?.audioStreams) ? data.audioStreams : []
+  const ranked = streams
+    .filter((s) => s?.url && /^https?:\/\//u.test(s.url))
+    .map((s) => ({
+      url: s.url,
+      bitrate: Number(s.bitrate) || 0,
+      mime: String(s.mimeType || ''),
+      title: String(data?.title || ''),
+    }))
+    .sort((a, b) => b.bitrate - a.bitrate)
+  // m4a/webm kapsayıcılar tercih edilir; ne varsa en iyisi alınır.
+  return ranked.find((s) => /mp4|m4a/u.test(s.mime))
+    || ranked.find((s) => /webm|opus/u.test(s.mime))
+    || ranked[0]
+    || null
+}

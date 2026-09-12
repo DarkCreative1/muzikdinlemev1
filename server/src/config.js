@@ -70,8 +70,7 @@ export const DEEZER_ARL_FILE = DEEZER_ARL
       ? path.resolve(process.env.DEEZER_ARL_FILE)
       : (fs.existsSync(DEFAULT_DZ_ARL_FILE) ? DEFAULT_DZ_ARL_FILE : ''))
 
-// ---- YouTube bot-engeli aşımı ----
-// 1) YT_COOKIES_B64: gerçek bir YouTube oturumunun cookies.txt içeriği (base64).
+// ---- YouTube bot-engeli aşımı ----// 1) YT_COOKIES_B64: gerçek bir YouTube oturumunun cookies.txt içeriği (base64).
 //    Girişli oturum veri merkezi IP'sinde çok daha az engellenir.
 // 2) YT_COOKIES_FILE: aynı dosyanın yolu (yerelde dosya ile çalışırken).
 // 3) YT_PROXY: konut/"residential" proxy URL'si (örn. http://user:pass@host:port).
@@ -98,6 +97,10 @@ function materializeYtCookies() {
 }
 export const YT_COOKIES_PATH = materializeYtCookies()
 export const YT_PROXY = String(process.env.YT_PROXY || '').trim()
+// Piped (üçüncü parti YouTube API'si): hesap/çerez gerektirmez, son çare kaynağı.
+// Public instance'lar genelde ölü olduğu için varsayılan KAPALIDIR; kendi
+// Piped sunucunuz varsa URL'yi verin (örn. https://pipedapi.siz.in). Boş = kapalı.
+export const PIPED_API_URL = String(process.env.PIPED_API_URL || '').replace(/\/+$/u, '')
 
 try {
   fs.mkdirSync(path.dirname(DB_PATH), { recursive: true })
