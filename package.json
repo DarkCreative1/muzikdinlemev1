@@ -3,6 +3,7 @@
   "private": true,
   "version": "1.0.0",
   "type": "module",
+  "engines": { "node": ">=20" },
   "scripts": {
     "dev": "concurrently -n server,web -c green,cyan \"npm run server:dev\" \"vite\"",
     "start": "concurrently -n server,web -c green,cyan \"npm run server\" \"vite\"",

@@ -3,6 +3,7 @@
   "private": true,
   "version": "1.0.0",
   "type": "module",
+  "engines": { "node": ">=20" },
   "description": "Node.js (Fastify) port of the Python FastAPI Spotify downloader backend",
   "scripts": {
     "start": "node src/server.js",
