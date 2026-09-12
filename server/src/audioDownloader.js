@@ -24,6 +24,17 @@ const PRELOAD_SPACING_MS = 1_500
 // Ham yt-dlp extractor argümanı (örn. PO token için "youtube:po_token=web.gvs+XXX").
 // Render ayarlarından YT_EXTRACTOR_ARGS olarak verilir, tüm YouTube denemelerine eklenir.
 const YT_EXTRACTOR_ARGS = String(process.env.YT_EXTRACTOR_ARGS || '').trim()
+// YT devre kesici: veri merkezi IP'sinden tüm istemciler bot engeline takılırsa
+// her parçada dakikalarca boşa kürek çekilmesin. Üst üste N başarısız YT indirme
+// sonrası YT denemeleri atlanıp doğrudan yedek kaynağa (SoundCloud) geçilir.
+// Soğuma süresi dolunca tek sondaj denemesine izin verilir (engel kalkmış olabilir).
+const YT_CIRCUIT_THRESHOLD = 3
+const YT_CIRCUIT_COOLDOWN_MS = 30 * 60_000
+let ytBotStreak = 0
+let lastYtProbeAt = 0
+function ytCircuitOpen() {
+  return ytBotStreak >= YT_CIRCUIT_THRESHOLD && Date.now() - lastYtProbeAt < YT_CIRCUIT_COOLDOWN_MS
+}
 const MAX_DOWNLOAD_STATES = 10_000
 // Bir indirme en fazla ~10 dk sürer; 1 saatten eski .part dosyaları ölü kalıntıdır.
 const STALE_PART_MS = 60 * 60_000
@@ -474,7 +485,10 @@ class AudioDownloader {
       if (ended) return
       ended = true
       if (timer) { clearInterval(timer); timer = null }
-      stream.destroy(new Error('Ses akışı alınamadı'))
+      // Hatasız kapat: destroy(Error) Fastify'da serialize edilemeyip 500
+      // patlatıyordu (FST_ERR_REP_INVALID_PAYLOAD_TYPE). İstemci boş/kesik
+      // akışı kendi hata mantığıyla ele alır.
+      stream.destroy()
     }
     const restartOrAbort = () => {
       if (ended) return
@@ -805,6 +819,13 @@ class AudioDownloader {
   // web_embedded → default); veri merkezi bot engeli istemciden istemciye değişir.
   // YT_EXTRACTOR_ARGS ham eklenir (örn. PO token).
   async tryYtdlpCandidate(trackId, candidate, attemptNo, outputTemplate) {
+    if (candidate.source === 'youtube' && process.env.YT_DISABLE === '1') {
+      return { done: false, error: new Error('YouTube devre dışı (YT_DISABLE).') }
+    }
+    if (candidate.source === 'youtube' && ytCircuitOpen()) {
+      return { done: false, error: new Error('YouTube bot engeli (devre kesici açık, yedek kaynağa geçiliyor).') }
+    }
+    if (candidate.source === 'youtube') lastYtProbeAt = Date.now()
     const clientAttempts = candidate.source === 'youtube'
       ? ['android', 'ios', 'tv', 'web_embedded', 'default']
       : ['default']
@@ -932,11 +953,16 @@ class AudioDownloader {
       const attemptUrls = [source, ...(source.alternatives || [])]
       let lastError = null
       let originSource = source.source
+      let ytSucceeded = false
+      const hadYoutube = attemptUrls.some((c) => c.source === 'youtube')
       for (let attempt = 0; attempt < attemptUrls.length; attempt += 1) {
         const candidate = attemptUrls[attempt]
         const result = await this.tryYtdlpCandidate(trackId, candidate, attempt, outputTemplate)
         if (result.error && !lastError) lastError = result.error
-        if (result.done) break
+        if (result.done) {
+          if (candidate.source === 'youtube') ytSucceeded = true
+          break
+        }
         if (attempt < attemptUrls.length - 1) {
           console.log(`[AudioDownloader] ${trackId} aday #${attempt + 1} başarısız, yedek deneniyor (${candidate.title?.slice(0, 40)})`)
           await new Promise((resolve) => setTimeout(resolve, 600))
@@ -946,7 +972,18 @@ class AudioDownloader {
       // Çapraz kaynak yedekliği: YouTube adaylarının tamamı bot engeline takılırsa
       // (veri merkezi IP'si), aynı parça SoundCloud'dan aranıp indirilir.
       // SC doğrudan URL'leri CDN'den gelir, YT bot kontrolüne takılmaz.
+      if (ytSucceeded) {
+        // YouTube çalışıyormuş — devre kesici sıfırlanır.
+        if (ytBotStreak >= YT_CIRCUIT_THRESHOLD) console.log('[AudioDownloader] YouTube engeli kalkmış görünüyor — devre kesici kapatıldı.')
+        ytBotStreak = 0
+      }
       if (!this.getCachedFile(trackId) && source.source !== 'soundcloud' && source.source !== 'deezer') {
+        if (hadYoutube && !ytSucceeded) {
+          ytBotStreak += 1
+          if (ytBotStreak === YT_CIRCUIT_THRESHOLD) {
+            console.log(`[AudioDownloader] YouTube üst üste ${ytBotStreak} kez engellendi — devre kesici açıldı, ${YT_CIRCUIT_COOLDOWN_MS / 60_000} dk boyunca YT atlanıp yedek kaynak denenecek.`)
+          }
+        }
         try {
           const sc = await this.findSoundCloudSource(trackData, 12_000).catch(() => null)
           if (sc?.url) {
