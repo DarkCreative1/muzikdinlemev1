@@ -20,6 +20,10 @@ yarn-error.log*
 !.env.example
 *.pem
 *.key
+*youtube-cookies.txt
+*.yt-cookies.txt
+*soundcloud-cookies.txt
+*deezer-arl.txt
 
 # OS / editors
 .DS_Store

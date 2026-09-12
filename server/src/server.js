@@ -5,7 +5,7 @@ import Fastify from 'fastify'
 import cors from '@fastify/cors'
 import fastifyStatic from '@fastify/static'
 import {
-  PORT, HOST, DOWNLOADS_DIR, FRONTEND_DIST, MAX_SEARCH_LIMIT, MAX_HISTORY_LIMIT, MAX_LIBRARY_LIMIT, MAX_CONCURRENT_DOWNLOADS,
+  PORT, HOST, DOWNLOADS_DIR, FRONTEND_DIST, MAX_SEARCH_LIMIT, MAX_HISTORY_LIMIT, MAX_LIBRARY_LIMIT, MAX_CONCURRENT_DOWNLOADS, YT_COOKIES_PATH, YT_PROXY,
 } from './config.js'
 import {
   saveOrUpdateTrack, getTrack, getAllDownloadedTracks, getDownloadedTrackCount,
@@ -602,6 +602,7 @@ try {
   await app.listen({ port: PORT, host: HOST })
   const displayHost = HOST.includes(':') && !HOST.startsWith('[') ? `[${HOST}]` : HOST
   app.log.info(`Sunucu çalışıyor: http://${displayHost}:${PORT} (IPv6 aktif)`)
+  app.log.info(`YT bypass: cookies=${YT_COOKIES_PATH ? 'açık' : 'kapalı'} proxy=${YT_PROXY ? 'açık' : 'kapalı'}`)
 }
 catch (error) { app.log.error(error); process.exit(1) }
 

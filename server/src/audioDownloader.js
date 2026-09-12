@@ -2,7 +2,7 @@ import path from 'node:path'
 import fs from 'node:fs'
 import { Readable } from 'node:stream'
 import ytdl from 'youtube-dl-exec'
-import { DOWNLOADS_DIR, MAX_CACHE_BYTES, MAX_DOWNLOAD_BYTES, MAX_CONCURRENT_DOWNLOADS, MAX_PENDING_DOWNLOADS } from './config.js'
+import { DOWNLOADS_DIR, MAX_CACHE_BYTES, MAX_DOWNLOAD_BYTES, MAX_CONCURRENT_DOWNLOADS, MAX_PENDING_DOWNLOADS, YT_COOKIES_PATH, YT_PROXY } from './config.js'
 import { saveOrUpdateTrack, markTrackDownloadMissing, getTrack } from './db.js'
 import { searchDeezerTracks, getDeezerTrackStream, hasDeezerAuth } from './deezerService.js'
 import { searchYouTubeTracks } from './youtubeSearch.js'
@@ -847,6 +847,10 @@ class AudioDownloader {
         retries: spawn === 0 ? 3 : 2, fragmentRetries: 3, concurrentFragments: 4,
         retrySleep: 2,
         ...(candidate.source === 'youtube' && ytArgs ? { extractorArgs: ytArgs } : {}),
+        // Bot-engeli aşımı: girişli oturum çerezi ve/veya konut proxy'si.
+        // Yalnızca YouTube adaylarında kullanılır (SC/Deezer direkt URL'lerde anlamsız).
+        ...(candidate.source === 'youtube' && YT_COOKIES_PATH ? { cookies: YT_COOKIES_PATH } : {}),
+        ...(candidate.source === 'youtube' && YT_PROXY ? { proxy: YT_PROXY } : {}),
       }, { timeout: 10 * 60_000, killSignal: 'SIGKILL' })
       runningProcesses.set(trackId, subprocess)
       const parseProgress = (chunk) => {

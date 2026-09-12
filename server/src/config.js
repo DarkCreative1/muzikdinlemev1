@@ -70,6 +70,35 @@ export const DEEZER_ARL_FILE = DEEZER_ARL
       ? path.resolve(process.env.DEEZER_ARL_FILE)
       : (fs.existsSync(DEFAULT_DZ_ARL_FILE) ? DEFAULT_DZ_ARL_FILE : ''))
 
+// ---- YouTube bot-engeli aşımı ----
+// 1) YT_COOKIES_B64: gerçek bir YouTube oturumunun cookies.txt içeriği (base64).
+//    Girişli oturum veri merkezi IP'sinde çok daha az engellenir.
+// 2) YT_COOKIES_FILE: aynı dosyanın yolu (yerelde dosya ile çalışırken).
+// 3) YT_PROXY: konut/"residential" proxy URL'si (örn. http://user:pass@host:port).
+//    IP veri merkezi değilse bot kontrolü çoğunlukla kalkar.
+function materializeYtCookies() {
+  try {
+    if (process.env.YT_COOKIES_FILE) {
+      const p = path.resolve(process.env.YT_COOKIES_FILE)
+      if (fs.existsSync(p)) return p
+    }
+    const b64 = String(process.env.YT_COOKIES_B64 || '').trim()
+    if (!b64) {
+      const def = path.join(SERVER_DIR, 'youtube-cookies.txt')
+      return fs.existsSync(def) ? def : ''
+    }
+    const text = Buffer.from(b64, 'base64').toString('utf8')
+    if (!text.includes('# Netscape HTTP Cookie File') && !text.includes('.youtube.com')) return ''
+    const target = path.join(SERVER_DIR, '.yt-cookies.txt')
+    fs.writeFileSync(target, text, { mode: 0o600 })
+    return target
+  } catch {
+    return ''
+  }
+}
+export const YT_COOKIES_PATH = materializeYtCookies()
+export const YT_PROXY = String(process.env.YT_PROXY || '').trim()
+
 try {
   fs.mkdirSync(path.dirname(DB_PATH), { recursive: true })
   fs.mkdirSync(DOWNLOADS_DIR, { recursive: true })
