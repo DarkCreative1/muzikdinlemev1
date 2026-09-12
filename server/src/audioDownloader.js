@@ -8,7 +8,7 @@ import { searchDeezerTracks, getDeezerTrackStream, hasDeezerAuth } from './deeze
 import { searchYouTubeTracks } from './youtubeSearch.js'
 import { searchSoundCloudTracks, getSoundCloudFullStream } from './soundcloudService.js'
 import { createDeezerDecryptor } from './deezerDecrypt.js'
-import { uploadFile, isR2Enabled } from './r2Storage.js'
+import { uploadFile, isR2Enabled, fetchR2ToFile } from './r2Storage.js'
 
 export const activeDownloads = new Map()
 const runningProcesses = new Map()
@@ -923,6 +923,26 @@ class AudioDownloader {
       throw new Error(error)
     }
     this.cleanupTrackArtifacts(trackId)
+
+    // R2 ÖNCELİĞİ: daha önce aynalanmış parça varsa YT/Deezer/SC'ye hiç
+    // dokunmadan R2'den çekilir. Ephemeral diskli (Render free) kurulumlarda
+    // restart sonrası her şeyi baştan indirmek zorunda kalınmaz.
+    if (!cached && isR2Enabled()) {
+      try {
+        const r2file = await fetchR2ToFile(trackId, DOWNLOADS_DIR, MAX_DOWNLOAD_BYTES)
+        if (r2file) {
+          this.registerCachedFile(r2file)
+          const fileSize = fs.statSync(r2file).size
+          const fileName = `${sanitizeFilename(trackData.artist) || 'Artist'} - ${sanitizeFilename(trackData.title) || trackId}${path.extname(r2file)}`
+          saveOrUpdateTrack({ ...trackData, file_path: r2file, file_name: fileName, file_size: fileSize, is_downloaded: true })
+          setTerminalState(trackId, { status: 'completed', progress: 100, file_name: fileName, file_url: `/api/stream/${encodeURIComponent(trackId)}` })
+          console.log(`[AudioDownloader] ${trackId} R2 önbelleğinden alındı (${(fileSize / 1024).toFixed(0)}KB)`)
+          return r2file
+        }
+      } catch (error) {
+        console.log(`[AudioDownloader] ${trackId} R2 çekme başarısız (${error?.message || error}), kaynak aramaya geçiliyor`)
+      }
+    }
 
     setDownloadState(trackId, { status: 'downloading', progress: 0 })
     try {
