@@ -153,6 +153,10 @@ export function playerReducer(state, action) {
     }
 
     case 'NEXT': {
+      // Tek parça tekrarı: aynı parçada kal, başa sar, çalmaya devam et.
+      if (state.repeat === 'track' && state.index >= 0 && state.index < state.queue.length) {
+        return { ...state, progress: 0, playing: true }
+      }
       const index = state.index + 1
       if (index >= state.queue.length) {
         if (state.repeat === 'context') return { ...state, index: 0, currentId: state.queue[0]?.id ?? null, progress: 0, playing: true }
@@ -196,6 +200,12 @@ export function playerReducer(state, action) {
     case 'CYCLE_REPEAT': {
       const order = { off: 'context', context: 'track', track: 'off' }
       return { ...state, repeat: order[state.repeat] || 'off' }
+    }
+
+    case 'SET_REPEAT': {
+      return ['off', 'context', 'track'].includes(action.value)
+        ? { ...state, repeat: action.value }
+        : state
     }
 
     case 'TOGGLE_SHUFFLE': return { ...state, shuffle: !state.shuffle }

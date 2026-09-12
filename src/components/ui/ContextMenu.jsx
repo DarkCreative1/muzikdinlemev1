@@ -48,7 +48,7 @@ export default function ContextMenu() {
           <div key={`sep-${index}`} style={{ height: 1, background: 'var(--hairline)', margin: '6px 8px' }} />
         ) : (
           <button
-            key={item.label}
+            key={`${item.label || 'item'}-${index}`}
             type="button"
             role="menuitem"
             className={`context-menu__item ${item.danger ? 'context-menu__item--danger' : ''}`}

@@ -33,6 +33,7 @@ export default function SearchPage() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [spotifyError, setSpotifyError] = useState('')
+  const [spotifyLoading, setSpotifyLoading] = useState(false)
   const spotifyInputRef = useRef(null)
 
   useEffect(() => {
@@ -77,7 +78,9 @@ export default function SearchPage() {
       return
     }
     setSpotifyError('')
-    setLoading(true)
+    // Arama yüklenmesiyle paylaşılmaz — debounced arama ile yarışıp
+    // birbirinin setLoading(false)'unu ezmesi önlenir.
+    setSpotifyLoading(true)
 
     try {
       const data = await api.getSpotifyLink(url)
@@ -91,7 +94,7 @@ export default function SearchPage() {
     } catch (err) {
       setSpotifyError(err.message || 'Spotify bağlantısı çözülemedi.')
     } finally {
-      setLoading(false)
+      setSpotifyLoading(false)
     }
   }
 
@@ -120,8 +123,8 @@ export default function SearchPage() {
             aria-label="Spotify URL"
           />
         </div>
-        <button type="submit" className="btn btn--soft">
-          İçe Aktar
+        <button type="submit" className="btn btn--soft" disabled={spotifyLoading}>
+          {spotifyLoading ? 'Aktarılıyor…' : 'İçe Aktar'}
         </button>
       </form>
       {spotifyError && (

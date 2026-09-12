@@ -14,14 +14,16 @@ export function LibraryProvider({ children }) {
   const [library, setLibrary] = useState([])
   const [loading, setLoading] = useState(true)
 
-  const refresh = useCallback(async () => {
+  const refresh = useCallback(async (signal) => {
     try {
+      const opts = signal ? { signal } : undefined
       const [playlistData, favoriteData, historyData, libraryData] = await Promise.allSettled([
-        api.getPlaylists({ timeout: 8000 }),
-        api.getFavorites(50, 0, { timeout: 8000 }),
-        api.getHistory(50, 0, { timeout: 8000 }),
-        api.getLibrary(50, 0, { timeout: 8000 }),
+        api.getPlaylists({ timeout: 8000, ...opts }),
+        api.getFavorites(50, 0, { timeout: 8000, ...opts }),
+        api.getHistory(50, 0, { timeout: 8000, ...opts }),
+        api.getLibrary(50, 0, { timeout: 8000, ...opts }),
       ])
+      if (signal?.aborted) return
       if (playlistData.status === 'fulfilled') setPlaylists(playlistData.value.playlists || [])
       if (favoriteData.status === 'fulfilled') setFavorites(favoriteData.value.favorites || [])
       if (historyData.status === 'fulfilled') setHistory(historyData.value.history || [])
@@ -29,11 +31,15 @@ export function LibraryProvider({ children }) {
     } catch {
       // ayrıntılar yukarıda zaten yakalandı
     } finally {
-      setLoading(false)
+      if (!signal?.aborted) setLoading(false)
     }
   }, [])
 
-  useEffect(() => { void refresh() }, [refresh])
+  useEffect(() => {
+    const ctrl = new AbortController()
+    void refresh(ctrl.signal)
+    return () => ctrl.abort()
+  }, [refresh])
 
   const createPlaylist = useCallback(async (name, description = '') => {
     const data = await api.createPlaylist({ name, description })

@@ -28,6 +28,10 @@ export function PlayerProvider({ children }) {
   const [nowPlayingPanel, setNowPlayingPanel] = useState(false)
   const audioRef = useRef(null)
   const requestRef = useRef(0)
+  // resolve effect [current?.id] ile çalışır; playing kapanış değeri bayatlar —
+  // hızlı parça değiştirmede yanlış play/pause senkronunu önlemek için ref aynası.
+  const playingRef = useRef(false)
+  playingRef.current = state.playing
   const retryRef = useRef(0)
   const playedRef = useRef('')
   const tickSecRef = useRef(-1)
@@ -48,7 +52,9 @@ export function PlayerProvider({ children }) {
   useEffect(() => {
     if (typeof prefs.volume === 'number') dispatch({ type: 'VOLUME', value: prefs.volume })
     if (typeof prefs.muted === 'boolean') dispatch({ type: 'SET_MUTED', value: prefs.muted })
-    if (prefs.repeat) dispatch({ type: 'CYCLE_REPEAT' })
+    // Kayıtlı tekrar değeri birebir geri yüklenir (CYCLE_REPEAT döngü hatası düzeltildi).
+    if (['off', 'context', 'track'].includes(prefs.repeat)) dispatch({ type: 'SET_REPEAT', value: prefs.repeat })
+    if (prefs.shuffle === true) dispatch({ type: 'TOGGLE_SHUFFLE' })
   }, [])
 
   // Tercihleri sakla
@@ -94,7 +100,7 @@ export function PlayerProvider({ children }) {
         audio.src = result.url
         audio.currentTime = 0
         audio.load()
-        if (state.playing) {
+        if (playingRef.current) {
           audio.play().catch(() => { /* autoplay engeli toggle'da ele alınır */ })
         }
       })
@@ -105,7 +111,7 @@ export function PlayerProvider({ children }) {
           audio.src = api.streamUrl(current.id)
           audio.currentTime = 0
           audio.load()
-          if (state.playing) audio.play().catch(() => {})
+          if (playingRef.current) audio.play().catch(() => {})
           dispatch({ type: 'CLEAR_ERROR' })
           return
         } catch { /* fallback de başarısız — aşağıda raporla */ }
@@ -162,14 +168,22 @@ export function PlayerProvider({ children }) {
     try {
       const audio = audioRef.current
       if (!audio || typeof AudioContext === 'undefined') return null
-      if (analyserRef.current) return analyserRef.current
+      if (analyserRef.current) {
+        // Autoplay politikasında askıda kalmış context'i uyandır.
+        if (audioContextRef.current?.state === 'suspended') void audioContextRef.current.resume().catch(() => {})
+        return analyserRef.current
+      }
+      // Aynı elemente ikinci kez kaynak bağlamak exception atar — bayrakla korunur.
+      if (audio._waveboxSource) return null
       const context = new AudioContext()
       const source = context.createMediaElementSource(audio)
+      audio._waveboxSource = true
       const analyser = context.createAnalyser()
       analyser.fftSize = 256
       analyser.smoothingTimeConstant = 0.82
       source.connect(analyser)
       analyser.connect(context.destination)
+      if (context.state === 'suspended') void context.resume().catch(() => {})
       audioContextRef.current = context
       analyserRef.current = analyser
       return analyser
@@ -250,10 +264,12 @@ export function PlayerProvider({ children }) {
     const onEnded = () => {
       const loopsSameTrack = state.repeat === 'track' || (state.repeat === 'context' && state.queue.length <= 1)
       if (loopsSameTrack) {
+        // Tek parça döngüsü: başa sar ve çalmaya devam et.
+        // NEXT dispatch edilmez — reducer zaten repeat==='track' durumunu korur.
         try { audio.currentTime = 0 } catch { /* sessiz */ }
         tickSecRef.current = 0
+        dispatch({ type: 'SET_PROGRESS', value: 0 })
         audio.play().catch(() => {})
-        dispatch({ type: 'NEXT' })
         return
       }
       const atLastTrack = state.index >= state.queue.length - 1
@@ -314,7 +330,17 @@ export function PlayerProvider({ children }) {
 
   // Media Session — sistem medya tuşları, kilit ekranı, bildirimler
   useEffect(() => {
-    if (typeof navigator === 'undefined' || !('mediaSession' in navigator) || !current) return
+    if (typeof navigator === 'undefined' || !('mediaSession' in navigator)) return undefined
+    // Kuyruk boşaldıysa eski şarkı kilit ekranında kalmasın.
+    if (!current) {
+      try {
+        navigator.mediaSession.metadata = null
+        for (const action of ['play', 'pause', 'previoustrack', 'nexttrack', 'seekto']) {
+          navigator.mediaSession.setActionHandler(action, null)
+        }
+      } catch { /* media session desteklenmiyorsa sessiz */ }
+      return undefined
+    }
     try {
       navigator.mediaSession.metadata = new MediaMetadata({
         title: current.title,
@@ -327,9 +353,17 @@ export function PlayerProvider({ children }) {
       navigator.mediaSession.setActionHandler('previoustrack', () => dispatch({ type: 'PREV' }))
       navigator.mediaSession.setActionHandler('nexttrack', () => dispatch({ type: 'NEXT' }))
       navigator.mediaSession.setActionHandler('seekto', (details) => {
-        if (Number.isFinite(details.seekTime)) dispatch({ type: 'SEEK', value: details.seekTime })
+        // Yalnızca reducer'a yazmak sesi oynatmaz — audio elementine de yazılır.
+        if (Number.isFinite(details.seekTime)) {
+          const audio = audioRef.current
+          if (audio) {
+            try { audio.currentTime = Number(details.seekTime) } catch { /* sessiz */ }
+          }
+          dispatch({ type: 'SEEK', value: details.seekTime })
+        }
       })
     } catch { /* media session desteklenmiyorsa sessiz */ }
+    return undefined
   }, [current])
 
   useEffect(() => {

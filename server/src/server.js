@@ -51,9 +51,17 @@ app.addHook('onRequest', async (req, reply) => {
   const bucket = rateBuckets.get(key) || { start: now, count: 0 }
   if (now - bucket.start > 60_000) { bucket.start = now; bucket.count = 0 }
   bucket.count += 1; rateBuckets.set(key, bucket)
+  // Tahliye: Map ekleme sırasını korur — en eski %10'u sıralamasız sil.
+  // (Önceki sort() her istekte O(n log n) idi ve CPU-DoS'a açıktı.)
   if (rateBuckets.size > MAX_RATE_BUCKETS) {
-    const oldest = [...rateBuckets.entries()].sort((a, b) => a[1].start - b[1].start).slice(0, Math.ceil(rateBuckets.size * 0.1))
-    for (const [staleKey] of oldest) rateBuckets.delete(staleKey)
+    const drop = Math.ceil(rateBuckets.size * 0.1)
+    let removed = 0
+    for (const staleKey of rateBuckets.keys()) {
+      if (removed >= drop) break
+      if (staleKey === key) continue
+      rateBuckets.delete(staleKey)
+      removed += 1
+    }
   }
   const authRoute = pathname === '/api/auth/login' || pathname === '/api/auth/register'
   const expensive = /^\/api\/(?:download|resolve|stream|radio|lyrics|spotify-link)(?:\/|$)/u.test(pathname)
@@ -245,14 +253,23 @@ function parseOffset(value) {
   if (!Number.isInteger(n) || n < 0 || n > 1_000_000) { const e = new Error('offset 0-1000000 arasında tam sayı olmalı'); e.statusCode = 422; throw e }
   return n
 }
+function requireSourceId(value, name) {
+  const result = optionalText(value, 200)
+  // Kaynak kimlikleri (YouTube 11-char, Spotify 22-char, SC/Deezer numerik)
+  // yalnızca bu alfabede olur — seçenek enjeksiyonu ve yol kaçışı engellenir.
+  if (!/^[A-Za-z0-9_-]{1,200}$/u.test(result)) { const e = new Error(`${name} biçimi geçersiz`); e.statusCode = 422; throw e }
+  return result
+}
 function trackPayload(raw) {
   const body = raw && typeof raw === 'object' ? raw : {}
+  const source = optionalText(body.source || 'unknown', 40).toLowerCase()
+  if (!/^[a-z0-9_-]{1,40}$/u.test(source)) { const e = new Error('source biçimi geçersiz'); e.statusCode = 422; throw e }
   const payload = {
     title: requireText(body.title, 'title'), artist: requireText(body.artist, 'artist'),
     album: optionalText(body.album, 300), cover_url: optionalHttpsUrl(body.cover_url, 'cover_url'),
     preview_url: optionalHttpsUrl(body.preview_url, 'preview_url'), duration: parseDuration(body.duration),
-    source: optionalText(body.source || 'unknown', 40).toLowerCase(), source_id: body.source_id ? optionalText(body.source_id, 200) : null,
-    spotify_id: body.spotify_id ? optionalText(body.spotify_id, 200) : null,
+    source, source_id: body.source_id ? requireSourceId(body.source_id, 'source_id') : null,
+    spotify_id: body.spotify_id ? requireSourceId(body.spotify_id, 'spotify_id') : null,
   }
   if (body.id) payload.id = requireId(body.id)
   return payload
@@ -383,7 +400,7 @@ app.get('/api/resolve/:trackId', async (req, reply) => {
   if (!track) {
     const artist = requireText(req.query?.artist, 'artist')
     const title = requireText(req.query?.title, 'title')
-    track = saveOrUpdateTrack({ id, artist, title, album: optionalText(req.query?.album, 300), cover_url: optionalHttpsUrl(req.query?.cover_url, 'cover_url'), duration: parseDuration(req.query?.duration), source: optionalText(req.query?.source || 'unknown', 40), source_id: req.query?.source_id ? optionalText(req.query.source_id, 200) : null, spotify_id: req.query?.spotify_id ? optionalText(req.query?.spotify_id, 200) : null })
+    track = saveOrUpdateTrack(trackPayload({ id, artist, title, album: req.query?.album, cover_url: req.query?.cover_url, duration: req.query?.duration, source: req.query?.source, source_id: req.query?.source_id, spotify_id: req.query?.spotify_id }))
   }
   const { state } = audioDownloader.startBackgroundDownload(track, { priority: true })
   if (state?.status === 'error') return reply.code(state.code === 'DOWNLOAD_QUEUE_FULL' ? 429 : 503).send({ detail: state.error, code: state.code || 'DOWNLOAD_UNAVAILABLE' })
@@ -424,7 +441,10 @@ app.get('/api/stream/:trackId', async (req, reply) => {
       if (!Number.isInteger(start) || start < 0) return reply.code(416).header('Content-Range', 'bytes */0').send({ detail: 'İstenen byte aralığı geçersiz.', code: 'INVALID_RANGE' })
     }
     reply.header('Accept-Ranges', 'bytes').header('Content-Type', mime).header('Cache-Control', 'private, no-store')
-    return reply.send(audioDownloader.createFollowStream(id, start))
+    const follow = audioDownloader.createFollowStream(id, start)
+    // İstemci koparsa yoklama zamanlayıcısını hemen durdur (fd/IOPS sızıntısı önlenir).
+    req.raw.on('close', () => { try { follow.destroy() } catch {} })
+    return reply.send(follow)
   }
   return reply.code(404).send({ detail: 'Önbellekte ses dosyası bulunamadı.', code: 'AUDIO_NOT_CACHED' })
 })

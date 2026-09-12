@@ -46,7 +46,7 @@ export default function GlobalPlayer() {
           <Artwork src={track.cover_url} alt={`${track.title} kapağı`} seed={track.id} />
         </span>
         <div className="player-bar__meta">
-          <Link to={`/track/${track.id}`} className="player-bar__title text-link">
+          <Link to={`/track/${encodeURIComponent(track.id)}`} className="player-bar__title text-link">
             {track.title}
           </Link>
           <Link to={`/artist/${encodeURIComponent(track.artist)}`} className="player-bar__artist text-link">

@@ -98,7 +98,7 @@ export default function TrackTable({
       {
         label: 'PARÇA DETAYINA GİT',
         icon: <Info size={16} strokeWidth={2.5} />,
-        onClick: () => navigate(`/track/${track.id}`),
+        onClick: () => navigate(`/track/${encodeURIComponent(track.id)}`),
       },
       { separator: true },
       {

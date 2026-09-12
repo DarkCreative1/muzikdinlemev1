@@ -26,9 +26,11 @@ export function UIProvider({ children }) {
     timers.current.set(id, timer)
   }, [])
 
-  useEffect(() => {
-    const active = [...timers.current.values()]
-    return () => active.forEach((timer) => clearTimeout(timer))
+  // Unmount'ta o ana dek birikmiş TÜM zamanlayıcılar temizlenir
+  // (önceki sürüm mount anındaki boş listeyi yakalıyordu).
+  useEffect(() => () => {
+    timers.current.forEach((timer) => clearTimeout(timer))
+    timers.current.clear()
   }, [])
 
   const openMenu = useCallback((x, y, items, trigger) => {

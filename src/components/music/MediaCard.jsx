@@ -30,10 +30,13 @@ export default function MediaCard({
     if (active) {
       player.toggle()
     } else {
-      const trackList = tracks?.length ? tracks : (item.tracks?.length ? item.tracks : [item])
+      const collectionTracks = tracks?.length ? tracks : item.tracks
+      // Koleksiyon kartı (albüm/sanatçı/playlist) her zaman ilk parçadan başlar:
+      // raf sırası (index) albüm içi parça sırası değildir.
+      const trackList = collectionTracks?.length ? collectionTracks : [item]
       player.playContext(
         trackList,
-        index,
+        0,
         contextName || title,
         contextId || `${type}-${item.id || title}`,
       )

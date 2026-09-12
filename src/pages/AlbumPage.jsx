@@ -9,6 +9,8 @@ import StateView from '../components/ui/StateView.jsx'
 export default function AlbumPage() {
   const { albumId } = useParams()
   const [searchParams] = useSearchParams()
+  // URLSearchParams her render'da yeni kimlik alabilir — ilkel değere indirgenir.
+  const artistParam = searchParams.get('artist')?.trim() || ''
   const navigate = useNavigate()
   const [tracks, setTracks] = useState([])
   const [loading, setLoading] = useState(true)
@@ -18,7 +20,7 @@ export default function AlbumPage() {
     if (!albumId) return undefined
     const ctrl = new AbortController()
     const decodedAlbum = decodeURIComponent(albumId)
-    const requestedArtist = searchParams.get('artist')?.trim() || ''
+    const requestedArtist = artistParam
     const searchQuery = requestedArtist ? `${requestedArtist} ${decodedAlbum}` : decodedAlbum
     setLoading(true)
     setError('')
@@ -41,7 +43,7 @@ export default function AlbumPage() {
       })
 
     return () => ctrl.abort()
-  }, [albumId, searchParams])
+  }, [albumId, artistParam])
 
   if (loading) {
     return (

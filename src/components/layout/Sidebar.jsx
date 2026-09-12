@@ -56,13 +56,31 @@ export default function Sidebar({ compact = false, onToggleCompact }) {
   const navLinkClass = ({ isActive }) =>
     `sidebar__link ${isActive ? 'is-active' : ''}`
 
+  const dialogs = (
+    <>
+      <PlaylistDialog
+        open={dialogOpen}
+        mode="create"
+        onClose={() => setDialogOpen(false)}
+        onSubmit={submit}
+      />
+
+      <SettingsDialog
+        open={settingsOpen}
+        onClose={() => setSettingsOpen(false)}
+      />
+    </>
+  )
+
+  // Mobilde kenar çubuğu mobil navigasyonla değişir: aside hiç render edilmez.
+  // (aria-hidden + inert içinde odaklanabilir NavLink kalması klavye tuzağıydı.)
+  if (isMobile) return dialogs
+
   return (
     <>
       <aside
         className={`sidebar ${compact ? 'sidebar--rail' : ''}`}
         aria-label="Ana Gezinme ve Kitaplık"
-        aria-hidden={isMobile ? 'true' : undefined}
-        inert={isMobile ? '' : undefined}
       >
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%' }}>
           <Brand compact={compact} />
@@ -203,17 +221,7 @@ export default function Sidebar({ compact = false, onToggleCompact }) {
         </button>
       </aside>
 
-      <PlaylistDialog
-        open={dialogOpen}
-        mode="create"
-        onClose={() => setDialogOpen(false)}
-        onSubmit={submit}
-      />
-
-      <SettingsDialog
-        open={settingsOpen}
-        onClose={() => setSettingsOpen(false)}
-      />
+      {dialogs}
     </>
   )
 }

@@ -50,7 +50,12 @@ async function request(url, opts = {}) {
     }
     return payload
   } catch (error) {
-    if (error?.name === 'AbortError') throw new ApiError('İstek zaman aşımına uğradı.', 408, 'TIMEOUT')
+    // Kullanıcı/yaşam döngüsü iptali ile gerçek zaman aşımı ayrılır:
+    // dış sinyal abort edildiyse orijinal AbortError aynen taşınır.
+    if (error?.name === 'AbortError') {
+      if (external?.aborted) throw error
+      throw new ApiError('İstek zaman aşımına uğradı.', 408, 'TIMEOUT')
+    }
     throw error
   } finally {
     clearTimeout(timeout)

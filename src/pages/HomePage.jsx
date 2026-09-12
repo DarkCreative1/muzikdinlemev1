@@ -21,27 +21,27 @@ export default function HomePage() {
   const [error, setError] = useState('')
 
   useEffect(() => {
-    loadHome()
-  }, [])
-
-  const loadHome = async () => {
     const ctrl = new AbortController()
-    try {
-      setLoading(true)
-      setError('')
-      const data = await api.getTrending(30, { signal: ctrl.signal })
-      if (ctrl.signal.aborted) return
-      const tracks = data.trending_tracks || data.tracks || []
-      setTrending(tracks)
-      setFeatured(data.featured_playlists || [])
-    } catch (err) {
-      if (!ctrl.signal.aborted) {
-        setError('Öneriler şu an alınamıyor. Sunucunun çalıştığından emin olun.')
+    const loadHome = async () => {
+      try {
+        setLoading(true)
+        setError('')
+        const data = await api.getTrending(30, { signal: ctrl.signal })
+        if (ctrl.signal.aborted) return
+        const tracks = data.trending_tracks || data.tracks || []
+        setTrending(tracks)
+        setFeatured(data.featured_playlists || [])
+      } catch (err) {
+        if (!ctrl.signal.aborted) {
+          setError('Öneriler şu an alınamıyor. Sunucunun çalıştığından emin olun.')
+        }
+      } finally {
+        if (!ctrl.signal.aborted) setLoading(false)
       }
-    } finally {
-      if (!ctrl.signal.aborted) setLoading(false)
     }
-  }
+    void loadHome()
+    return () => ctrl.abort()
+  }, [])
 
   const greeting = (() => {
     const hour = new Date().getHours()
@@ -85,7 +85,8 @@ export default function HomePage() {
     },
   ]
 
-  if (loading && libraryLoading) {
+  // İskelet, iki kaynaktan biri yüklenirken gösterilir (ikisi birden beklenmez).
+  if (loading || libraryLoading) {
     return (
       <div aria-busy="true">
         <div className="skeleton skeleton--title" style={{ width: 260, height: 36, marginBottom: 20 }} />

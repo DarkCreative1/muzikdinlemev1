@@ -29,7 +29,15 @@ export const DOWNLOADS_DIR = process.env.DOWNLOADS_DIR
 export const FRONTEND_DIST = path.resolve(SERVER_DIR, '..', 'dist')
 // 8000 bazı yerel geliştirme araçları tarafından sık kullanılıyor; uygulama
 // varsayılan olarak ayrı bir portta açılır. PORT ile canlı ortamda değiştirilebilir.
-export const PORT = Number.parseInt(process.env.PORT || '8001', 10)
+export const PORT = (() => {
+  const raw = String(process.env.PORT || '8001').trim()
+  const n = Number(raw)
+  if (!Number.isInteger(n) || n < 1 || n > 65535) {
+    console.error(`[config] Geçersiz PORT="${raw}". 1-65535 arasında tam sayı olmalı.`)
+    process.exit(1)
+  }
+  return n
+})()
 // Ağ arayüzlerine istemeden açılmamak yerine IPv6 dahil tüm arayüzlerde
 // dinlemek için '::' varsayılandır (dual-stack: IPv4 + IPv6).
 // Sadece IPv4 loopback istenirse HOST=127.0.0.1, sadece IPv6 loopback için HOST=::1 verin.
@@ -62,5 +70,11 @@ export const DEEZER_ARL_FILE = DEEZER_ARL
       ? path.resolve(process.env.DEEZER_ARL_FILE)
       : (fs.existsSync(DEFAULT_DZ_ARL_FILE) ? DEFAULT_DZ_ARL_FILE : ''))
 
-fs.mkdirSync(path.dirname(DB_PATH), { recursive: true })
-fs.mkdirSync(DOWNLOADS_DIR, { recursive: true })
+try {
+  fs.mkdirSync(path.dirname(DB_PATH), { recursive: true })
+  fs.mkdirSync(DOWNLOADS_DIR, { recursive: true })
+} catch (error) {
+  console.error(`[config] Veri dizinleri oluşturulamadı: ${error?.message || error}`)
+  console.error(`[config] DB_PATH=${DB_PATH} DOWNLOADS_DIR=${DOWNLOADS_DIR} — yazma iznini ve yolu kontrol edin.`)
+  process.exit(1)
+}

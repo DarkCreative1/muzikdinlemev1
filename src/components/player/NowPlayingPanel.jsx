@@ -23,6 +23,10 @@ export default function NowPlayingPanel() {
   const [dialogTrack, setDialogTrack] = useState(null)
   const [downloading, setDownloading] = useState(false)
   const eqCanvasRef = useRef(null)
+  const downloadCtrl = useRef(null)
+
+  // Panel kapanırsa yarım indirme yoklaması state yazmasın.
+  useEffect(() => () => downloadCtrl.current?.abort(), [])
 
   const track = player.current
 
@@ -105,27 +109,51 @@ export default function NowPlayingPanel() {
 
   const handleDownload = async () => {
     if (downloading) return
+    downloadCtrl.current?.abort()
+    const ctrl = new AbortController()
+    downloadCtrl.current = ctrl
     setDownloading(true)
     try {
-      const start = await api.downloadTrack(track)
+      const start = await api.downloadTrack(track, { signal: ctrl.signal })
       let ready = start?.status === 'ready'
       if (!ready) {
         for (let attempt = 0; attempt < 6 && !ready; attempt += 1) {
-          await new Promise((resolve) => setTimeout(resolve, 1200))
-          const status = await api.getDownloadStatus(track.id)
+          await new Promise((resolve, reject) => {
+            const timer = setTimeout(resolve, 1200)
+            ctrl.signal.addEventListener('abort', () => { clearTimeout(timer); reject(new DOMException('Aborted', 'AbortError')) }, { once: true })
+          })
+          if (ctrl.signal.aborted) return
+          const status = await api.getDownloadStatus(track.id, { signal: ctrl.signal })
           ready = status?.status === 'ready' || status?.status === 'completed'
         }
       }
+      if (ctrl.signal.aborted) return
       if (ready) {
-        window.open(api.getDownloadFileUrl(track.id), '_blank', 'noopener')
-        toast('İndirme tamamlandı, dosya açıldı.', 'success')
+        // window.open header taşıyamaz (token gider, 401 yenir) — fetch + blob ile indirilir.
+        const token = (() => { try { return localStorage.getItem(api.AUTH_TOKEN_KEY) || '' } catch { return '' } })()
+        const response = await fetch(api.getDownloadFileUrl(track.id), {
+          headers: token ? { Authorization: `Bearer ${token}` } : {},
+          signal: ctrl.signal,
+        })
+        if (!response.ok) throw new Error(`Dosya alınamadı (${response.status}).`)
+        const blob = await response.blob()
+        const objectUrl = URL.createObjectURL(blob)
+        const anchor = document.createElement('a')
+        anchor.href = objectUrl
+        anchor.download = `${track.artist || 'Artist'} - ${track.title || track.id}.mp3`
+        document.body.appendChild(anchor)
+        anchor.click()
+        anchor.remove()
+        setTimeout(() => URL.revokeObjectURL(objectUrl), 10_000)
+        toast('İndirme tamamlandı.', 'success')
       } else {
         toast('İndirme arka planda devam ediyor.', 'info')
       }
     } catch (error) {
+      if (ctrl.signal.aborted || error?.name === 'AbortError') return
       toast(`İndirme başlatılamadı: ${error.message}`, 'error')
     } finally {
-      setDownloading(false)
+      if (!ctrl.signal.aborted) setDownloading(false)
     }
   }
 

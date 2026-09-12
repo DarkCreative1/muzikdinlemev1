@@ -310,10 +310,23 @@ function setTerminalState(trackId, state) {
 
 function extractYtError(error) {
   const stderr = String(error?.stderr || '')
+  let raw = ''
   for (const line of stderr.split(/\r?\n/)) {
     const match = /ERROR:\s*(.+)/.exec(line)
-    if (match) return match[1].trim().slice(0, 300)
+    if (match) { raw = match[1].trim(); break }
   }
+  // Ham stderr istemciye verilmez (sürüm/yol/extractor sızıntısı);
+  // yalnızca bilinen güvenli durumlar eşlenir, gerisi genel mesajdır.
+  // Tam çıktı sunucu günlüğündedir (drainQueue .catch).
+  if (!raw) return 'İndirme başarısız oldu.'
+  if (/private|login required|sign in/i.test(raw)) return 'Bu kaynak giriş gerektiriyor veya gizli.'
+  if (/unavailable|removed|deleted|not available/i.test(raw)) return 'Kaynak artık kullanılamıyor veya kaldırılmış.'
+  if (/429|too many requests|rate.?limit/i.test(raw)) return 'Kaynak geçici olarak istekleri sınırlıyor. Biraz sonra tekrar deneyin.'
+  if (/403|forbidden|denied/i.test(raw)) return 'Kaynak erişimi engellendi. Farklı bir kaynak deneniyor.'
+  if (/timeout|timed out|network|connection/i.test(raw)) return 'Ağ zaman aşımı. Tekrar deneyin.'
+  if (/age|confirm your age/i.test(raw)) return 'Bu içerik yaş doğrulaması gerektiriyor.'
+  if (/geo|region|blocked in your country/i.test(raw)) return 'Bu içerik bölgenizde kullanılamıyor.'
+  if (/premiere|upcoming|live event/i.test(raw)) return 'Bu yayın henüz başlamamış veya canlı etkinlik.'
   return 'İndirme başarısız oldu.'
 }
 
@@ -758,6 +771,11 @@ class AudioDownloader {
         const { done, value } = await reader.read()
         if (done) break
         received += value.length
+        // Şişirilmiş/bozuk yanıt diski doldurmadan durdurulur.
+        if (received > MAX_DOWNLOAD_BYTES) {
+          try { await reader.cancel() } catch {}
+          throw new Error('Deezer yanıtı boyut sınırını aştı.')
+        }
         for (const chunk of decryptor.write(value)) fs.writeSync(fd, chunk)
         if (total > 0) setDownloadState(trackId, { status: 'downloading', progress: Math.min(99, Math.round((received / total) * 100)) })
       }
@@ -936,6 +954,10 @@ class AudioDownloader {
     if (shuttingDown) return { started: false, state: { status: 'error', progress: 0, error: 'Sunucu kapanıyor.' } }
     if (pendingDownloads.length >= MAX_PENDING_DOWNLOADS) {
       return { started: false, state: { status: 'error', progress: 0, error: 'İndirme kuyruğu dolu.', code: 'DOWNLOAD_QUEUE_FULL' } }
+    }
+    // Aynı parça hem bekleyen kuyrukta hem işlemde teklenir (çift yt-dlp / .part yarışı önlenir).
+    if (inflightDownloads.has(trackId) || pendingDownloads.some((t) => t.id === trackId)) {
+      return { started: false, state: activeDownloads.get(trackId) || { status: 'queued', progress: 0 } }
     }
     setDownloadState(trackId, { status: 'queued', progress: 0 })
     const item = { ...trackData, _priority: priority }

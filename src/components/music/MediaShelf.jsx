@@ -1,6 +1,5 @@
 import MediaCard from './MediaCard.jsx'
 import { useReveal } from '../../hooks/useReveal.js'
-import { mediaKey } from '../../lib/mediaKey.js'
 
 // Medya Rafı — Neo-brutalist Izgara ve Yatay Kaydırma
 export default function MediaShelf({
@@ -61,7 +60,9 @@ export default function MediaShelf({
       >
         {items.map((item, index) => (
           <MediaCard
-            key={mediaKey(item, type, index)}
+            // Kararlı anahtar: index kuyruğa alınırsa her satır remount olur
+            // (kapaklar yeniden yüklenir). Kimlik yoksa son çare index.
+            key={`${type}:${String(item.id ?? item.uri ?? item.name ?? item.title ?? index)}`}
             item={item}
             type={type}
             to={to?.(item) || (type === 'artist'

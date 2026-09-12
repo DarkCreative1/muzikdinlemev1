@@ -182,8 +182,13 @@ export function getUserBySession(token) {
 }
 export const deleteSession = (token) => token ? db.prepare('DELETE FROM sessions WHERE token_hash=?').run(hashToken(token)).changes > 0 : false
 
+const TRACK_ID_RE = /^[A-Za-z0-9_-]{1,128}$/u
 export function createTrackId(trackData) {
-  if (trackData.id) return String(trackData.id)
+  if (trackData.id) {
+    const id = String(trackData.id)
+    if (!TRACK_ID_RE.test(id)) throw new Error('Parça kimliği biçimi geçersiz')
+    return id
+  }
   const source = String(trackData.source || 'unknown').trim().toLowerCase()
   const sourceId = String(trackData.source_id || trackData.spotify_id || '').trim()
   const identity = sourceId
