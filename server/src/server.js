@@ -443,7 +443,8 @@ app.get('/api/stream/:trackId', async (req, reply) => {
     reply.header('Accept-Ranges', 'bytes').header('Content-Type', mime).header('Cache-Control', 'private, no-store')
     const follow = audioDownloader.createFollowStream(id, start)
     // İstemci koparsa yoklama zamanlayıcısını hemen durdur (fd/IOPS sızıntısı önlenir).
-    req.raw.on('close', () => { try { follow.destroy() } catch {} })
+    // closeFollow temiz FIN yapar; destroy() 500'e yol açtığı için kullanılmaz.
+    req.raw.on('close', () => { try { follow.closeFollow?.() } catch {} })
     return reply.send(follow)
   }
   return reply.code(404).send({ detail: 'Önbellekte ses dosyası bulunamadı.', code: 'AUDIO_NOT_CACHED' })

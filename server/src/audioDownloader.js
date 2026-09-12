@@ -475,22 +475,20 @@ class AudioDownloader {
       read() {},
       destroy(error, cb) { if (timer) { clearInterval(timer); timer = null } cb(error) },
     })
+    // Temiz kapatma (clean FIN): akış her durumda hatasız bitirilir.
+    // destroy(Error) veya destroy() Fastify'da ERR_STREAM_PREMATURE_CLOSE →
+    // FST_ERR_REP_INVALID_PAYLOAD_TYPE 500'üne yol açıyordu. Kesik akışı
+    // istemci (audio elementi) kendi hata mantığıyla ele alır.
     const finish = () => {
       if (ended) return
       ended = true
       if (timer) { clearInterval(timer); timer = null }
-      stream.push(null)
+      try { stream.push(null) } catch { /* soket zaten ölmüş olabilir */ }
     }
-    const abort = () => {
-      if (ended) return
-      ended = true
-      if (timer) { clearInterval(timer); timer = null }
-      // Hatasız kapat: destroy(Error) Fastify'da serialize edilemeyip 500
-      // patlatıyordu (FST_ERR_REP_INVALID_PAYLOAD_TYPE). İstemci boş/kesik
-      // akışı kendi hata mantığıyla ele alır.
-      stream.destroy()
-    }
-    const restartOrAbort = () => {
+    // Dışarıdan kapatma (istemci koptuğunda server.js çağırır): zamanlayıcıyı
+    // durdurur, akışı temiz bitirir. Idempotent'tir.
+    stream.closeFollow = finish
+    const restartOrFinish = () => {
       if (ended) return
       if (restarts < maxRestarts && sawBytes && Date.now() - attemptStart >= minRestartMs) {
         const track = getTrack(trackId)
@@ -503,7 +501,7 @@ class AudioDownloader {
           return
         }
       }
-      return abort()
+      return finish()
     }
     let polling = false
     const poll = async () => {
@@ -529,14 +527,14 @@ class AudioDownloader {
           if (full && pos >= size) return finish()
           if (partial) {
             const state = activeDownloads.get(trackId)
-            if (!state || state.status === 'error' || state.status === 'completed') return restartOrAbort()
+            if (!state || state.status === 'error' || state.status === 'completed') return restartOrFinish()
           }
         } else {
           const state = activeDownloads.get(trackId)
-          if (!state || state.status === 'error' || state.status === 'completed') return restartOrAbort()
+          if (!state || state.status === 'error' || state.status === 'completed') return restartOrFinish()
         }
-        if (Date.now() - lastProgress > stallTimeoutMs) return abort()
-      } catch { return abort() } finally {
+        if (Date.now() - lastProgress > stallTimeoutMs) return finish()
+      } catch { return finish() } finally {
         polling = false
       }
     }
