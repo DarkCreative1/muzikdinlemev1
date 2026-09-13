@@ -21,40 +21,56 @@ async function rapidGet(host, apiPath, timeoutMs = 12_000) {
 }
 
 // Sağlayıcı 1: { results: [{ has_audio, mime, quality, url }] }
-async function viaDownloader1(videoId) {
+// TÜM ses URL'leri döner (sıralı: m4a öncelikli). Biri IP-kilitli (403) çıkarsa
+// sıradaki denenir.
+async function viaDownloader1All(videoId) {
   const data = await rapidGet(HOST_DL1, `/download.php?id=${encodeURIComponent(videoId)}`)
   const rows = Array.isArray(data?.results) ? data.results : []
   const audio = rows.filter((r) => r?.has_audio && r?.url && /^https?:\/\//u.test(r.url))
-  if (!audio.length) return null
-  const best = audio.find((r) => /mp4|m4a/u.test(String(r.mime || ''))) || audio[0]
-  return { url: best.url, title: String(data?.title || ''), via: 'rapid-dl1' }
+  if (!audio.length) return []
+  const title = String(data?.title || '')
+  const m4a = audio.filter((r) => /mp4|m4a/u.test(String(r.mime || '')))
+  const rest = audio.filter((r) => !/mp4|m4a/u.test(String(r.mime || '')))
+  return [...m4a, ...rest].map((r) => ({ url: r.url, title, via: 'rapid-dl1' }))
 }
 
-// Sağlayıcı 2: { adaptiveFormats: [{ mimeType, bitrate, url }], formats: [...] }
-async function viaYtstream(videoId) {
+// Sağlayıcı 2: adaptive (ses) + muxed. TÜM adaylar döner.
+async function viaYtstreamAll(videoId) {
   const data = await rapidGet(HOST_DL2, `/dl?id=${encodeURIComponent(videoId)}`)
+  const out = []
+  const title = String(data?.title || '')
   const adaptive = Array.isArray(data?.adaptiveFormats) ? data.adaptiveFormats : []
   const audioOnly = adaptive
     .filter((f) => f?.url && /^https?:\/\//u.test(f.url) && /^audio\//u.test(String(f.mimeType || '')))
     .sort((a, b) => (Number(b.bitrate) || 0) - (Number(a.bitrate) || 0))
-  if (audioOnly.length) return { url: audioOnly[0].url, title: String(data?.title || ''), via: 'rapid-dl2' }
-  const muxed = (Array.isArray(data?.formats) ? data.formats : [])
-    .find((f) => f?.url && /audio/u.test(String(f.mimeType || '')) && /mp4/u.test(String(f.mimeType || '')))
-  if (muxed) return { url: muxed.url, title: String(data?.title || ''), via: 'rapid-dl2-muxed' }
-  return null
+  for (const f of audioOnly) out.push({ url: f.url, title, via: 'rapid-dl2' })
+  for (const f of (Array.isArray(data?.formats) ? data.formats : [])) {
+    if (f?.url && /audio/u.test(String(f.mimeType || ''))) out.push({ url: f.url, title, via: 'rapid-dl2-muxed' })
+  }
+  return out
+}
+
+// videoId → doğrudan ses URL ADAYLARI (sıralı). Her biri tek tek denenmelidir:
+// biri 403 yerse sıradaki (farklı host/redirector) çalışabilir.
+export async function fetchRapidCandidates(videoId) {
+  const id = String(videoId || '').trim()
+  if (!rapidEnabled() || !/^[\w-]{11}$/u.test(id)) return []
+  const out = []
+  try {
+    for (const c of await viaDownloader1All(id).catch(() => [])) {
+      if (!out.some((x) => x.url === c.url)) out.push(c)
+    }
+  } catch {}
+  try {
+    for (const c of await viaYtstreamAll(id).catch(() => [])) {
+      if (!out.some((x) => x.url === c.url)) out.push(c)
+    }
+  } catch {}
+  return out
 }
 
 // videoId → doğrudan ses URL'si. Sırayla dener, ilk bulan kazanır.
 export async function fetchRapidStream(videoId) {
-  const id = String(videoId || '').trim()
-  if (!rapidEnabled() || !/^[\w-]{11}$/u.test(id)) return null
-  try {
-    const first = await viaDownloader1(id).catch(() => null)
-    if (first?.url) return first
-  } catch {}
-  try {
-    const second = await viaYtstream(id).catch(() => null)
-    if (second?.url) return second
-  } catch {}
-  return null
+  const all = await fetchRapidCandidates(videoId).catch(() => [])
+  return all[0] || null
 }

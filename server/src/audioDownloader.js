@@ -6,7 +6,7 @@ import { DOWNLOADS_DIR, MAX_CACHE_BYTES, MAX_DOWNLOAD_BYTES, MAX_CONCURRENT_DOWN
 import { saveOrUpdateTrack, markTrackDownloadMissing, getTrack } from './db.js'
 import { searchDeezerTracks, getDeezerTrackStream, hasDeezerAuth } from './deezerService.js'
 import { searchYouTubeTracks, fetchPipedStream } from './youtubeSearch.js'
-import { fetchRapidStream, rapidEnabled } from './rapidApi.js'
+import { fetchRapidStream, fetchRapidCandidates, rapidEnabled } from './rapidApi.js'
 import { searchSoundCloudTracks, getSoundCloudFullStream } from './soundcloudService.js'
 import { createDeezerDecryptor } from './deezerDecrypt.js'
 import { uploadFile, isR2Enabled, fetchR2ToFile } from './r2Storage.js'
@@ -1048,12 +1048,22 @@ class AudioDownloader {
           try {
             for (const vid of fallbackIds.slice(0, 2)) {
               if (this.getCachedFile(trackId)) break
-              const rapid = await fetchRapidStream(vid).catch(() => null)
-              if (rapid?.url) {
+              // Aynı videonun TÜM aday URL'leri denenir: biri IP-kilitli (403)
+              // çıkarsa sıradaki (farklı host/redirector) çalışabilir.
+              const candidates = await fetchRapidCandidates(vid).catch(() => [])
+              for (const rapid of candidates.slice(0, 4)) {
+                if (this.getCachedFile(trackId)) break
                 console.log(`[AudioDownloader] ${trackId} RapidAPI yedeği deneniyor (${rapid.via}) — ${(rapid.title || vid).slice(0, 60)}`)
-                await this.downloadDirectUrl(rapid.url, trackId)
+                try {
+                  await this.downloadDirectUrl(rapid.url, trackId)
+                } catch (error) {
+                  console.log(`[AudioDownloader] ${trackId} RapidAPI adayı başarısız (${rapid.via}: ${error?.message || error})`)
+                  if (!lastError) lastError = error
+                  continue
+                }
                 if (this.getCachedFile(trackId)) { originSource = 'rapid'; break }
               }
+              if (this.getCachedFile(trackId)) break
             }
           } catch (error) {
             console.log(`[AudioDownloader] ${trackId} RapidAPI yedeği başarısız (${error?.message || error})`)
