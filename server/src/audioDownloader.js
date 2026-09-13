@@ -814,8 +814,9 @@ class AudioDownloader {
   }
 
   // Tek adayı yt-dlp ile indirir. done=true ise getCachedFile(trackId) doludur.
-  // YouTube adaylarında istemci zinciri denenir (android → ios → tv →
-  // web_embedded → default); veri merkezi bot engeli istemciden istemciye değişir.
+  // YouTube'da TEK sondaj (android) yapılır: ilk hatada istemci zinciriyle
+  // oyalanılmaz, doğrudan RapidAPI/Deezer/SC yedeklerine geçilir (IP bazlı
+  // engelde farklı istemci/video denemek sonuç vermez).
   // YT_EXTRACTOR_ARGS ham eklenir (örn. PO token).
   async tryYtdlpCandidate(trackId, candidate, attemptNo, outputTemplate) {
     if (candidate.source === 'youtube' && process.env.YT_DISABLE === '1') {
@@ -825,9 +826,7 @@ class AudioDownloader {
       return { done: false, error: new Error('YouTube bot engeli (devre kesici açık, yedek kaynağa geçiliyor).') }
     }
     if (candidate.source === 'youtube') lastYtProbeAt = Date.now()
-    const clientAttempts = candidate.source === 'youtube'
-      ? ['android', 'ios', 'tv', 'web_embedded', 'default']
-      : ['default']
+    const clientAttempts = candidate.source === 'youtube' ? ['android'] : ['default']
     let lastError = null
     for (let spawn = 0; spawn < clientAttempts.length; spawn += 1) {
       if (spawn > 0) {
@@ -1005,9 +1004,9 @@ class AudioDownloader {
         }
       }
 
-      // Çapraz kaynak yedekliği: YouTube adaylarının tamamı bot engeline takılırsa
-      // (veri merkezi IP'si), aynı parça SoundCloud'dan aranıp indirilir.
-      // SC doğrudan URL'leri CDN'den gelir, YT bot kontrolüne takılmaz.
+      // Çapraz kaynak yedekliği. YT tek sondajda öldüyse oyalanılmaz.
+      // Sıra — youtube kaynaklı: Rapid → Deezer → SC → Piped.
+      // Diğerleri: Deezer → Rapid → SC → Piped (Deezer bedava ve kaliteli).
       if (ytSucceeded) {
         // YouTube çalışıyormuş — devre kesici sıfırlanır.
         if (ytBotStreak >= YT_CIRCUIT_THRESHOLD) console.log('[AudioDownloader] YouTube engeli kalkmış görünüyor — devre kesici kapatıldı.')
@@ -1020,10 +1019,18 @@ class AudioDownloader {
             console.log(`[AudioDownloader] YouTube üst üste ${ytBotStreak} kez engellendi — devre kesici açıldı, ${YT_CIRCUIT_COOLDOWN_MS / 60_000} dk boyunca YT atlanıp yedek kaynak denenecek.`)
           }
         }
-        // 1) Önce Deezer yedeği: YT tıkalıyken sürüm farkı kabul edilir,
-        // çalmayan parçadan iyidir. (YT seçili parçalarda Deezer ilk turda
-        // denenmez; burası yalnızca YT öldüyse çalışır.)
-        if (!this.getCachedFile(trackId)) {
+        const isYtTrack = String(trackData.source || '').toLowerCase() === 'youtube' || source.source === 'youtube'
+        // Aday video ID'leri (Rapid + Piped ortak kullanır).
+        const fallbackIds = []
+        for (const c of [source, ...(source.alternatives || [])]) {
+          const vid = String(c?.videoId || (c?.source === 'youtube' ? c?.source_id : '') || '')
+          if (/^[\w-]{11}$/u.test(vid) && !fallbackIds.includes(vid)) fallbackIds.push(vid)
+          if (fallbackIds.length >= 2) break
+        }
+        const directId = String(trackData.source === 'youtube' ? trackData.source_id || '' : '')
+        if (/^[\w-]{11}$/u.test(directId) && !fallbackIds.includes(directId)) fallbackIds.unshift(directId)
+        const tryDeezer = async () => {
+          if (this.getCachedFile(trackId)) return
           try {
             const dz = await this.findDeezerSource(trackData, Number(trackData.duration) || 0, Date.now(), 8_000).catch(() => null)
             if (dz?.url) {
@@ -1036,8 +1043,25 @@ class AudioDownloader {
             if (!lastError) lastError = error
           }
         }
-        // 2) Son çare SoundCloud (Deezer de yoksa/bozuksa).
-        if (!this.getCachedFile(trackId)) {
+        const tryRapid = async () => {
+          if (this.getCachedFile(trackId) || !rapidEnabled() || !fallbackIds.length) return
+          try {
+            for (const vid of fallbackIds.slice(0, 2)) {
+              if (this.getCachedFile(trackId)) break
+              const rapid = await fetchRapidStream(vid).catch(() => null)
+              if (rapid?.url) {
+                console.log(`[AudioDownloader] ${trackId} RapidAPI yedeği deneniyor (${rapid.via}) — ${(rapid.title || vid).slice(0, 60)}`)
+                await this.downloadDirectUrl(rapid.url, trackId)
+                if (this.getCachedFile(trackId)) { originSource = 'rapid'; break }
+              }
+            }
+          } catch (error) {
+            console.log(`[AudioDownloader] ${trackId} RapidAPI yedeği başarısız (${error?.message || error})`)
+            if (!lastError) lastError = error
+          }
+        }
+        const trySoundCloud = async () => {
+          if (this.getCachedFile(trackId)) return
           try {
             const sc = await this.findSoundCloudSource(trackData, 12_000).catch(() => null)
             if (sc?.url) {
@@ -1054,39 +1078,8 @@ class AudioDownloader {
             if (!lastError) lastError = error
           }
         }
-        // 3) RapidAPI yedeği (anahtarlı, kotası var): videoId başına 1-2 çağrı.
-        // 4) En son çare Piped (varsayılan kapalı, kendi sunucun varsa).
-        // İkisi de aynı aday ID'lerini kullanır.
-        const fallbackIds = []
-        if (!this.getCachedFile(trackId) && (rapidEnabled() || PIPED_API_URL)) {
-          for (const c of [source, ...(source.alternatives || [])]) {
-            const vid = String(c?.videoId || (c?.source === 'youtube' ? c?.source_id : '') || '')
-            if (/^[\w-]{11}$/u.test(vid) && !fallbackIds.includes(vid)) fallbackIds.push(vid)
-            if (fallbackIds.length >= 2) break
-          }
-          const directId = String(trackData.source === 'youtube' ? trackData.source_id || '' : '')
-          if (/^[\w-]{11}$/u.test(directId) && !fallbackIds.includes(directId)) fallbackIds.unshift(directId)
-        }
-        if (!this.getCachedFile(trackId) && rapidEnabled() && fallbackIds.length) {
-          try {
-            let rapid = null
-            for (const vid of fallbackIds.slice(0, 2)) {
-              if (this.getCachedFile(trackId)) break
-              rapid = await fetchRapidStream(vid).catch(() => null)
-              if (rapid?.url) {
-                console.log(`[AudioDownloader] ${trackId} RapidAPI yedeği deneniyor (${rapid.via}) — ${(rapid.title || vid).slice(0, 60)}`)
-                await this.downloadDirectUrl(rapid.url, trackId)
-                if (this.getCachedFile(trackId)) { originSource = 'rapid'; break }
-              }
-            }
-          } catch (error) {
-            console.log(`[AudioDownloader] ${trackId} RapidAPI yedeği başarısız (${error?.message || error})`)
-            if (!lastError) lastError = error
-          }
-        }
-        // 3) En son çare Piped: üçüncü parti YouTube API'sinden doğrudan ses URL'si.
-        // Hesap/çerez gerektirmez. googlevideo URL'leri genelde IP bağımsız çalışır.
-        if (!this.getCachedFile(trackId) && PIPED_API_URL && (source.source === 'youtube' || source.source === 'spotify')) {
+        const tryPiped = async () => {
+          if (this.getCachedFile(trackId) || !PIPED_API_URL || (source.source !== 'youtube' && source.source !== 'spotify')) return
           try {
             for (const vid of fallbackIds.slice(0, 2)) {
               if (this.getCachedFile(trackId)) break
@@ -1102,6 +1095,16 @@ class AudioDownloader {
             if (!lastError) lastError = error
           }
         }
+        if (isYtTrack) {
+          await tryRapid()
+          await tryDeezer()
+          await trySoundCloud()
+        } else {
+          await tryDeezer()
+          await tryRapid()
+          await trySoundCloud()
+        }
+        await tryPiped()
       }
 
       const downloadedFile = this.getCachedFile(trackId)
